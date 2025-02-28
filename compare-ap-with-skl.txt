@@ -1,0 +1,42 @@
+import numpy as np
+from sklearn.metrics import average_precision_score as ap_skl
+from scors import average_precision as ap, Order
+from sklearn.datasets import load_breast_cancer
+from sklearn.linear_model import LogisticRegression
+X, y = load_breast_cancer(return_X_y=True)
+clf = MultiOutputClassifier(clf).fit(X, y)
+from sklearn.multioutput import MultiOutputClassifier
+clf = MultiOutputClassifier(clf).fit(X, y)
+clf = MultiOutputClassifier().fit(X, y)
+clf = LogisticRegression(solver="liblinear", random_state=0).fit(X, y)
+pred = clf.predict_proba(X)[:, 1]
+sc_skl = ap_skl(y, pred)
+sc_skl
+sc = ap(y, pred, np.ones_like(y))
+sc = ap(y, pred, weights=np.ones_like(y))
+y.dtype
+y.shape
+sc = ap(np.require(y, dtype=np.uint8), pred, weights=np.ones_like(y))
+pred.dtype
+sc = ap(np.require(y, dtype=np.uint8), pred, weights=np.ones_like(pred, dtype=np.float64)))
+sc = ap(np.require(y, dtype=np.uint8), pred, weights=np.ones_like(pred, dtype=np.float64))
+sc
+sc_skl
+np.isclose(sc, sc_skl)
+%timeit sc_skl = ap_skl(y, pred)
+%timeit sc = ap(np.require(y, dtype=np.uint8), pred, weights=np.ones_like(pred, dtype=np.float64))
+sort_indices = np.argsort(pred)
+y_sorted = y[sort_indices]
+pred_sorted = pred[sort_indices]
+%timeit sc_skl = ap_skl(y_sorted, pred_sorted)
+%timeit sc = ap(np.require(y_sorted, dtype=np.uint8), pred_sorted, weights=np.ones_like(pred, dtype=np.float64))
+%timeit sc = ap(np.require(y_sorted, dtype=np.uint8), pred_sorted, weights=np.ones_like(pred, dtype=np.float64), Order.ASCENDING)
+%timeit sc = ap(np.require(y_sorted, dtype=np.uint8), pred_sorted, weights=np.ones_like(pred, dtype=np.float64), order=Order.ASCENDING)
+y_sorted = y[sort_indices[::-1]]
+pred_sorted = pred[sort_indices[::-1]]
+%timeit sc = ap(np.require(y_sorted, dtype=np.uint8), pred_sorted, weights=np.ones_like(pred, dtype=np.float64), order=Order.ASCENDING)
+np.isclose(sc, sc_skl)
+%timeit sc = ap(np.require(y_sorted, dtype=np.uint8), pred_sorted, weights=np.ones_like(pred, dtype=np.float64), order=Order.DESCENDING)
+%timeit sc_skl = ap_skl(y_sorted, pred_sorted)
+np.isclose(sc, sc_skl)
+%history -f "compare-ap-with-skl.txt"
