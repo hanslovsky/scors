@@ -1,15 +1,8 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
 set -e
 
 python3 -m pip install uv
-
-if [ ! -d .venv ]; then
-    uv venv --python=3.12
-fi
-
-source .venv/bin/activate
-
+uv venv --python=3.12 --allow-existing
 uv sync
-
-python -m pytest -vvs
+uv run pytest -vvs
