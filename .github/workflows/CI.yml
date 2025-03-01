@@ -54,24 +54,11 @@ jobs:
           name: wheels-linux-${{ matrix.platform.target }}
           path: dist
       - name: pytest
-        if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
+        if: ${{ startsWith(matrix.platform.target, 'x86') }}
         shell: bash
         run: |
           set -e
           ./test-in-ci.sh
-      - name: pytest
-        if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
-        uses: uraimo/run-on-arch-action@v2
-        with:
-          arch: ${{ matrix.platform.target }}
-          distro: ubuntu22.04
-          githubToken: ${{ github.token }}
-          install: |
-            apt-get update
-            apt-get install -y --no-install-recommends python3 python3-pip
-          run: |
-            set -e
-            ./test-in-ci.sh
 
   musllinux:
     runs-on: ${{ matrix.platform.runner }}
