@@ -58,6 +58,8 @@ jobs:
         shell: bash
         run: |
           set -e
+          echo $SCCACHE_GHA_ENABLED
+          echo $RUSTC_WRAPPER
           ./test-in-ci.sh
       - name: pytest
         if: ${{ !startsWith(matrix.platform.target, 'x86') && matrix.platform.target != 'ppc64' }}
