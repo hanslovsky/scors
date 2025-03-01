@@ -5,7 +5,7 @@ readme = "README.md"
 authors = [{ name = "Philipp Hanslovsky", email = "philipp.hanslovsky@gmail.com" }]
 maintainers = [{ name = "Philipp Hanslovsky", email = "philipp.hanslovsky@gmail.com" }]
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"  # For 3.13, I see errors in CI: error[E0432]: unresolved import `pyo3::sync::GILProtected`
 
 [dependencies]
 
