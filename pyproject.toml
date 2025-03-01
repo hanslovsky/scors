@@ -1,0 +1,28 @@
+[project]
+name = "scors"
+description = "Binary classification scores in Rust"
+readme = "README.md"
+authors = [{ name = "Philipp Hanslovsky", email = "philipp.hanslovsky@gmail.com" }]
+maintainers = [{ name = "Philipp Hanslovsky", email = "philipp.hanslovsky@gmail.com" }]
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[dependencies]
+
+[dependency-groups]
+dev = [
+  "ipython>=8.33.0",
+  "maturin >= 1.8.2",
+  "numpy>=1.26.4",
+  "pytest>=8.3.4",
+  "scikit-learn>=1.6.1"
+]
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+module-name = "scors._scors"
+python-source = "src"
+

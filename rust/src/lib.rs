@@ -209,7 +209,7 @@ pub fn average_precision_py<'py>(
     return Ok(ap);
 }
 
-#[pymodule(name = "scors")]
+#[pymodule(name = "_scors")]
 fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(average_precision_py, m)?).unwrap();
     m.add_class::<PyOrder>().unwrap();
