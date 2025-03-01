@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from sklearn.metrics import average_precision_score as ap_skl
 
@@ -12,3 +13,19 @@ def test_sklearn_dosctring():
     expected = 0.8333333333333333
     actual = average_precision(y_true, y_scores, weights=np.ones_like(y_scores, dtype=np.float64))
     assert np.isclose
+
+
+@pytest.mark.parametrize("n", [10, 100, 1_000, 10_000])
+@pytest.mark.parametrize("with_weights", [True, False])
+def test_compare_sklearn_random(n: int, with_weights: bool):
+    rng = np.random.default_rng(42)
+    # TODO sklearn returns 0.0 if all labels are negative,
+    #      my implementation returns nan.
+    #      Figure out if we want to diverge from sklearn here.
+    labels = np.require((np.arange(n) / n) >= 0.9, dtype=np.uint8)
+    predictions = rng.random(labels.shape, dtype=np.float64)
+    weights = rng.random(labels.shape, dtype=np.float64) if with_weights else np.ones_like(predictions)
+    score_skl = ap_skl(labels, predictions, sample_weight=weights)
+    score = average_precision(labels, predictions, weights=weights)
+    assert np.isclose(score_skl, score), f"{score} != {score_skl}"
+
