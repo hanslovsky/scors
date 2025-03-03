@@ -407,28 +407,26 @@ fn py_order_as_order(order: PyOrder) -> Order {
 #[pyfunction(name = "average_precision")]
 #[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
 pub fn average_precision_py<'py>(
-    _py: Python<'py>,
+    py: Python<'py>,
     labels: PyReadonlyArray1<'py, u8>,
     predictions: PyReadonlyArray1<'py, f64>,
     weights: Option<PyReadonlyArray1<'py, f64>>,
     order: Option<PyOrder>
 ) -> Result<f64, NotContiguousError> {
-    // TODO benchmark if slice has any benefits over just as_array
-    let o = order.map(py_order_as_order);
+    let labels = labels.as_array();
+    let predictions = predictions.as_array();
+    let order = order.map(py_order_as_order);
     let ap = match weights {
-        None => {
-            if let (Ok(l), Ok(p)) = (labels.as_slice(), predictions.as_slice()) {
-                average_precision_with_order(&l, &p, None::<&Vec<f64>>, o)  
-            } else {
-                average_precision_with_order(&labels.as_array(), &predictions.as_array(), None::<&Vec<f64>>, o)
-            }
+        Some(w) => {
+            let weights = w.as_array();
+            py.allow_threads(move || {
+                average_precision_with_order(&labels, &predictions, Some(&weights), order)
+            })
         },
-        Some(weight) => {
-            if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weight.as_slice()) {
-                average_precision_with_order(&l, &p, Some(&w), o)  
-            } else {
-                average_precision_with_order(&labels.as_array(), &predictions.as_array(), Some(&weight.as_array()), o)
-            }
+        None => {
+            py.allow_threads(move || {
+                average_precision_with_order(&labels, &predictions, None::<&Vec<f64>>, order)
+            })
         }
     };
     return Ok(ap);
@@ -437,25 +435,26 @@ pub fn average_precision_py<'py>(
 #[pyfunction(name = "roc_auc")]
 #[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_false_positive_rate=None))]
 pub fn roc_auc_py<'py>(
-    _py: Python<'py>,
+    py: Python<'py>,
     labels: PyReadonlyArray1<'py, u8>,
     predictions: PyReadonlyArray1<'py, f64>,
     weights: Option<PyReadonlyArray1<'py, f64>>,
     order: Option<PyOrder>,
     max_false_positive_rate: Option<f64>,
 ) -> Result<f64, NotContiguousError> {
-    let o = order.map(py_order_as_order);
+    let labels = labels.as_array();
+    let predictions = predictions.as_array();
+    let order = order.map(py_order_as_order);
     let ap = match weights {
-        Some(weight) => if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weight.as_slice()) {
-            roc_auc_with_order(&l, &p, Some(&w), o, max_false_positive_rate)
-        } else {
-            roc_auc_with_order(&labels.as_array(), &predictions.as_array(), Some(&weight.as_array()), o, max_false_positive_rate)
-        }
-        None => if let (Ok(l), Ok(p)) = (labels.as_slice(), predictions.as_slice()) {
-            roc_auc_with_order(&l, &p, None::<&Vec<f64>>, o, max_false_positive_rate)
-        } else {
-            roc_auc_with_order(&labels.as_array(), &predictions.as_array(), None::<&Vec<f64>>, o, max_false_positive_rate)
-        }
+        Some(weight) => {
+            let weights = weight.as_array();
+            py.allow_threads(move || {
+                roc_auc_with_order(&labels, &predictions, Some(&weights), order, max_false_positive_rate)
+            })
+        },
+        None => py.allow_threads(move || {
+            roc_auc_with_order(&labels, &predictions, None::<&Vec<f64>>, order, max_false_positive_rate)
+        })
     };
     return Ok(ap);
 }
