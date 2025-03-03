@@ -1,7 +1,10 @@
 [package]
 name = "scors"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
+license = "MIT"
+license-file = "../LICENSE"
+description = "Scores for binary classifier evaluation"
 
 [lib]
 name = "_scors"
