@@ -20,18 +20,16 @@ permissions:
 
 jobs:
   validate-version:
-    runs-on:
-      runner: ubuntu-22.04
-      target: x86_64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: 3.12
       - name: validate-version
-      - run: |
-        set -e
-        python verify-version.py --tag="$GIT_TAG_NAME"
+        run: |
+          set -e
+          python verify-version.py --tag="$GIT_TAG_NAME"
   linux:
     needs: [validate-version]
     runs-on: ${{ matrix.platform.runner }}
