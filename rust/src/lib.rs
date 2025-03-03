@@ -2,7 +2,6 @@ use ndarray::{ArrayView,Ix1};
 use numpy::{NotContiguousError,PyReadonlyArray1};
 use pyo3::prelude::*; // {PyModule,PyResult,Python,pymodule};
 use std::iter::DoubleEndedIterator;
-use std::time::Instant;
 
 pub enum Order {
     ASCENDING,
@@ -163,27 +162,36 @@ pub fn average_precision_on_descending_iterator(labels: impl Iterator<Item = u8>
 pub fn roc_auc<L, P, W>(labels: &L, predictions: &P, weights: &W) -> f64
 where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
 {
-    return roc_auc_with_order(labels, predictions, weights, None);
+    return roc_auc_with_order(labels, predictions, weights, None, None);
 }
 
-pub fn roc_auc_with_order<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Option<Order>) -> f64
+pub fn roc_auc_max_fpr<L, P, W>(labels: &L, predictions: &P, weights: &W, max_false_positive_rate: Option<f64>) -> f64
+where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+{
+    return roc_auc_with_order(labels, predictions, weights, None, max_false_positive_rate);
+}
+
+pub fn roc_auc_with_order<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
 where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
 {
     return match order {
-        Some(o) => roc_auc_on_sorted_labels(labels, predictions, weights, o),
+        Some(o) => roc_auc_on_sorted_labels(labels, predictions, weights, o, max_false_positive_rate),
         None => {
             let indices = predictions.argsort_unstable();
             let sorted_labels = select(labels, &indices);
             let sorted_predictions = select(predictions, &indices);
             let sorted_weights = select(weights, &indices);
-            let ap = roc_auc_on_sorted_labels(&sorted_labels, &sorted_predictions, &sorted_weights, Order::DESCENDING);
-            ap
+            let roc_auc_score = roc_auc_on_sorted_labels(&sorted_labels, &sorted_predictions, &sorted_weights, Order::DESCENDING, max_false_positive_rate);
+            roc_auc_score
         }
     };
 }
-pub fn roc_auc_on_sorted_labels<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Order) -> f64 
+pub fn roc_auc_on_sorted_labels<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: Option<f64>) -> f64
 where L: Data<u8>, P: Data<f64>, W: Data<f64> {
-    return roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut weights.get_iterator(), order);
+    return match max_false_positive_rate {
+        None => roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut weights.get_iterator(), order),
+        Some(max_fpr) => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, weights, order, max_fpr)
+    };
 }
 
 pub fn roc_auc_on_sorted_iterator(
@@ -235,6 +243,86 @@ fn area_under_line_segment(x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     return dx * y0 + dy * dx * 0.5;
 }
 
+fn get_positive_sum(
+    labels: impl Iterator<Item = u8>,
+    weights: impl Iterator<Item = f64>
+) -> (f64, f64) {
+    let mut false_positives = 0f64;
+    let mut true_positives = 0f64;
+    for (label, weight) in labels.zip(weights) {
+        let lw = weight * (label as f64);
+        false_positives += weight - lw;
+        true_positives += lw;
+    }
+    return (false_positives, true_positives);
+}
+
+pub fn roc_auc_on_sorted_with_fp_cutoff<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: f64) -> f64
+where L: Data<u8>, P: Data<f64>, W: Data<f64> {
+    // TODO validate max_fpr
+    let (fps, tps) = get_positive_sum(labels.get_iterator(), weights.get_iterator());
+    let mut l_it = labels.get_iterator();
+    let mut p_it = predictions.get_iterator();
+    let mut w_it = weights.get_iterator();
+    return match order {
+        Order::ASCENDING => roc_auc_on_descending_iterator_with_fp_cutoff(&mut l_it.rev(), &mut p_it.rev(), &mut w_it.rev(), fps, tps, max_false_positive_rate),
+        Order::DESCENDING => roc_auc_on_descending_iterator_with_fp_cutoff(&mut l_it, &mut p_it, &mut w_it, fps, tps, max_false_positive_rate)
+    };
+}
+    
+
+fn roc_auc_on_descending_iterator_with_fp_cutoff(
+    labels: &mut impl Iterator<Item = u8>,
+    predictions: &mut impl Iterator<Item = f64>,
+    weights: &mut impl Iterator<Item = f64>,
+    false_positive_sum: f64,
+    true_positive_sum: f64,
+    max_false_positive_rate: f64
+) -> f64 {
+    let mut false_positives: f64 = 0.0;
+    let mut true_positives: f64 = 0.0;
+    let mut last_counted_fp = 0.0;
+    let mut last_counted_tp = 0.0;
+    let mut area_under_curve = 0.0;
+    let mut zipped = labels.zip(predictions).zip(weights).peekable();
+    // let false_positive_cutoff = max_false_positive_rate * false_positive_sum;
+    loop {
+        match zipped.next() {
+            None => break,
+            Some(actual) => {
+                let l = actual.0.0 as f64;
+                let w = actual.1;
+                let wl = l * w;
+                let next_tp = true_positives + wl / true_positive_sum;
+                let next_fp = false_positives + (w - wl) / false_positive_sum;
+                let is_above_max = next_fp > max_false_positive_rate; // false_positive_cutoff;
+                if is_above_max {
+                    let dx = next_fp  - false_positives;
+                    let dy = next_tp - true_positives;
+                    true_positives += dy * max_false_positive_rate / dx;
+                    false_positives = max_false_positive_rate;
+                } else {
+                    true_positives = next_tp;
+                    false_positives = next_fp;
+                }
+                if zipped.peek().map(|x| x.0.1 != actual.0.1).unwrap_or(true) || is_above_max {
+                    area_under_curve += area_under_line_segment(last_counted_fp, false_positives, last_counted_tp, true_positives);
+                    last_counted_fp = false_positives;
+                    last_counted_tp = true_positives;
+                }
+                if is_above_max {
+                    break;
+                }                
+            }
+        };
+    }
+    // let normalized_area_under_curve = area_under_curve / (true_positives * false_positives);
+    // let normalized_area_under_curve = area_under_curve / (true_positive_sum * false_positive_sum);
+    let min_area = 0.5 * max_false_positive_rate * max_false_positive_rate;
+    let max_area = max_false_positive_rate;
+    return 0.5 * (1.0 + (area_under_curve - min_area) / (max_area - min_area));
+}
+
 
 // Python bindings
 #[pyclass(eq, eq_int, name="Order")]
@@ -263,7 +351,7 @@ fn py_order_as_order(order: PyOrder) -> Order {
 #[pyfunction(name = "average_precision")]
 #[pyo3(signature = (labels, predictions, *, weights, order=None))]
 pub fn average_precision_py<'py>(
-    py: Python<'py>,
+    _py: Python<'py>,
     labels: PyReadonlyArray1<'py, u8>,
     predictions: PyReadonlyArray1<'py, f64>,
     weights: PyReadonlyArray1<'py, f64>,
@@ -281,20 +369,20 @@ pub fn average_precision_py<'py>(
 }
 
 #[pyfunction(name = "roc_auc")]
-#[pyo3(signature = (labels, predictions, *, weights, order=None))]
+#[pyo3(signature = (labels, predictions, *, weights, order=None, max_false_positive_rate=None))]
 pub fn roc_auc_py<'py>(
-    py: Python<'py>,
+    _py: Python<'py>,
     labels: PyReadonlyArray1<'py, u8>,
     predictions: PyReadonlyArray1<'py, f64>,
     weights: PyReadonlyArray1<'py, f64>,
-    order: Option<PyOrder>
+    order: Option<PyOrder>,
+    max_false_positive_rate: Option<f64>,
 ) -> Result<f64, NotContiguousError> {
     let o = order.map(py_order_as_order);
     let ap = if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weights.as_slice()) {
-        let roc_auc = roc_auc_with_order(&l, &p, &w, o);
-        roc_auc
+        roc_auc_with_order(&l, &p, &w, o, max_false_positive_rate)
     } else {
-        roc_auc_with_order(&labels.as_array(), &predictions.as_array(), &weights.as_array(), o)
+        roc_auc_with_order(&labels.as_array(), &predictions.as_array(), &weights.as_array(), o, max_false_positive_rate)
     };
 
     return Ok(ap);
