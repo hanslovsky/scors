@@ -285,7 +285,7 @@ fn roc_auc_on_descending_iterator_with_fp_cutoff(
     let mut last_counted_tp = 0.0;
     let mut area_under_curve = 0.0;
     let mut zipped = labels.zip(predictions).zip(weights).peekable();
-    // let false_positive_cutoff = max_false_positive_rate * false_positive_sum;
+    let false_positive_cutoff = max_false_positive_rate * false_positive_sum;
     loop {
         match zipped.next() {
             None => break,
@@ -293,14 +293,14 @@ fn roc_auc_on_descending_iterator_with_fp_cutoff(
                 let l = actual.0.0 as f64;
                 let w = actual.1;
                 let wl = l * w;
-                let next_tp = true_positives + wl / true_positive_sum;
-                let next_fp = false_positives + (w - wl) / false_positive_sum;
-                let is_above_max = next_fp > max_false_positive_rate; // false_positive_cutoff;
+                let next_tp = true_positives + wl;
+                let next_fp = false_positives + (w - wl);
+                let is_above_max = next_fp > false_positive_cutoff;
                 if is_above_max {
                     let dx = next_fp  - false_positives;
                     let dy = next_tp - true_positives;
-                    true_positives += dy * max_false_positive_rate / dx;
-                    false_positives = max_false_positive_rate;
+                    true_positives += dy * false_positive_cutoff / dx;
+                    false_positives = false_positive_cutoff;
                 } else {
                     true_positives = next_tp;
                     false_positives = next_fp;
@@ -316,11 +316,10 @@ fn roc_auc_on_descending_iterator_with_fp_cutoff(
             }
         };
     }
-    // let normalized_area_under_curve = area_under_curve / (true_positives * false_positives);
-    // let normalized_area_under_curve = area_under_curve / (true_positive_sum * false_positive_sum);
+    let normalized_area_under_curve = area_under_curve / (true_positive_sum * false_positive_sum);
     let min_area = 0.5 * max_false_positive_rate * max_false_positive_rate;
     let max_area = max_false_positive_rate;
-    return 0.5 * (1.0 + (area_under_curve - min_area) / (max_area - min_area));
+    return 0.5 * (1.0 + (normalized_area_under_curve - min_area) / (max_area - min_area));
 }
 
 
