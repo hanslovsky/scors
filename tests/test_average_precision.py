@@ -24,7 +24,7 @@ def test_compare_sklearn_random(n: int, with_weights: bool):
     #      Figure out if we want to diverge from sklearn here.
     labels = np.require((np.arange(n) / n) >= 0.9, dtype=np.uint8)
     predictions = rng.random(labels.shape, dtype=np.float64)
-    weights = rng.random(labels.shape, dtype=np.float64) if with_weights else np.ones_like(predictions)
+    weights = rng.random(labels.shape, dtype=np.float64) if with_weights else None
     score_skl = ap_skl(labels, predictions, sample_weight=weights)
     score = average_precision(labels, predictions, weights=weights)
     assert np.isclose(score_skl, score), f"{score} != {score_skl}"

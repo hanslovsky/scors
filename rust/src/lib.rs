@@ -8,6 +8,19 @@ pub enum Order {
     DESCENDING
 }
 
+struct ConstWeight {
+    value: f64
+}
+
+impl ConstWeight {
+    fn new(value: f64) -> Self {
+        return ConstWeight { value: value };
+    }
+    fn one() -> Self {
+        return Self::new(1.0);
+    }
+}
+
 pub trait Data<T: Clone>: {
     // TODO This is necessary because it seems that there is no trait like that in rust
     //      Maybe I am just not aware, but for now use my own trait.
@@ -17,6 +30,29 @@ pub trait Data<T: Clone>: {
 
 pub trait SortableData<T> {
     fn argsort_unstable(&self) -> Vec<usize>;
+}
+
+impl Iterator for ConstWeight {
+    type Item = f64;
+    fn next(&mut self) -> Option<f64> {
+        return Some(self.value);
+    }
+}
+
+impl DoubleEndedIterator for ConstWeight {
+    fn next_back(&mut self) -> Option<f64> {
+        return Some(self.value);
+    }
+}
+
+impl Data<f64> for ConstWeight {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = f64> {
+        return ConstWeight::new(self.value);
+    }
+
+    fn get_at(&self, _index: usize) -> f64 {
+        return self.value.clone();
+    }
 }
 
 impl <T: Clone> Data<T> for Vec<T> {
@@ -103,13 +139,13 @@ where T: Copy, I: Data<T>
     return selection;
 }
 
-pub fn average_precision<L, P, W>(labels: &L, predictions: &P, weights: &W) -> f64
+pub fn average_precision<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
 where L: Data<u8>, P: SortableData<f64>, W: Data<f64>
 {
     return average_precision_with_order(labels, predictions, weights, None);
 }
 
-pub fn average_precision_with_order<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Option<Order>) -> f64
+pub fn average_precision_with_order<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
 where L: Data<u8>, P: SortableData<f64>, W: Data<f64>
 {
     return match order {
@@ -117,17 +153,25 @@ where L: Data<u8>, P: SortableData<f64>, W: Data<f64>
         None => {
             let indices = predictions.argsort_unstable();
             let sorted_labels = select(labels, &indices);
-            let sorted_weights = select(weights, &indices);
-            let ap = average_precision_on_sorted_labels(&sorted_labels, &sorted_weights, Order::DESCENDING);
+            let ap = match weights {
+                None => {
+                    // let w: Oepion<&
+                    average_precision_on_sorted_labels(&sorted_labels, weights, Order::DESCENDING)
+                },
+                Some(w) => average_precision_on_sorted_labels(&sorted_labels, Some(&select(w, &indices)), Order::DESCENDING),
+            };
             ap
         }
     };
 }
 
-pub fn average_precision_on_sorted_labels<L, W>(labels: &L, weights: &W, order: Order) -> f64
+pub fn average_precision_on_sorted_labels<L, W>(labels: &L, weights: Option<&W>, order: Order) -> f64
 where L: Data<u8>, W: Data<f64>
 {
-    return average_precision_on_iterator(labels.get_iterator(), weights.get_iterator(), order);
+    return match weights {
+        None => average_precision_on_iterator(labels.get_iterator(), ConstWeight::one(), order),
+        Some(w) => average_precision_on_iterator(labels.get_iterator(), w.get_iterator(), order)
+    };
 }
 
 pub fn average_precision_on_iterator<L, W>(labels: L, weights: W, order: Order) -> f64
@@ -348,22 +392,32 @@ fn py_order_as_order(order: PyOrder) -> Order {
 }
 
 #[pyfunction(name = "average_precision")]
-#[pyo3(signature = (labels, predictions, *, weights, order=None))]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
 pub fn average_precision_py<'py>(
     _py: Python<'py>,
     labels: PyReadonlyArray1<'py, u8>,
     predictions: PyReadonlyArray1<'py, f64>,
-    weights: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
     order: Option<PyOrder>
 ) -> Result<f64, NotContiguousError> {
+    // TODO benchmark if slice has any benefits over just as_array
     let o = order.map(py_order_as_order);
-    let ap = if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weights.as_slice()) {
-        let ap = average_precision_with_order(&l, &p, &w, o);
-        ap
-    } else {
-        average_precision_with_order(&labels.as_array(), &predictions.as_array(), &weights.as_array(), o)
+    let ap = match weights {
+        None => {
+            if let (Ok(l), Ok(p)) = (labels.as_slice(), predictions.as_slice()) {
+                average_precision_with_order(&l, &p, None::<&Vec<f64>>, o)  
+            } else {
+                average_precision_with_order(&labels.as_array(), &predictions.as_array(), None::<&Vec<f64>>, o)
+            }
+        },
+        Some(weight) => {
+            if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weight.as_slice()) {
+                average_precision_with_order(&l, &p, Some(&w), o)  
+            } else {
+                average_precision_with_order(&labels.as_array(), &predictions.as_array(), Some(&weight.as_array()), o)
+            }
+        }
     };
-
     return Ok(ap);
 }
 
