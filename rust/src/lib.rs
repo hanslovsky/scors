@@ -203,19 +203,19 @@ pub fn average_precision_on_descending_iterator(labels: impl Iterator<Item = u8>
 
 
 // ROC AUC score
-pub fn roc_auc<L, P, W>(labels: &L, predictions: &P, weights: &W) -> f64
+pub fn roc_auc<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
 where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
 {
     return roc_auc_with_order(labels, predictions, weights, None, None);
 }
 
-pub fn roc_auc_max_fpr<L, P, W>(labels: &L, predictions: &P, weights: &W, max_false_positive_rate: Option<f64>) -> f64
+pub fn roc_auc_max_fpr<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, max_false_positive_rate: Option<f64>) -> f64
 where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
 {
     return roc_auc_with_order(labels, predictions, weights, None, max_false_positive_rate);
 }
 
-pub fn roc_auc_with_order<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
+pub fn roc_auc_with_order<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
 where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
 {
     return match order {
@@ -224,17 +224,30 @@ where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
             let indices = predictions.argsort_unstable();
             let sorted_labels = select(labels, &indices);
             let sorted_predictions = select(predictions, &indices);
-            let sorted_weights = select(weights, &indices);
-            let roc_auc_score = roc_auc_on_sorted_labels(&sorted_labels, &sorted_predictions, &sorted_weights, Order::DESCENDING, max_false_positive_rate);
+            let roc_auc_score = match weights {
+                Some(w) => {
+                    let sorted_weights = select(w, &indices);
+                    roc_auc_on_sorted_labels(&sorted_labels, &sorted_predictions, Some(&sorted_weights), Order::DESCENDING, max_false_positive_rate)
+                },
+                None => {
+                    roc_auc_on_sorted_labels(&sorted_labels, &sorted_predictions, None::<&W>, Order::DESCENDING, max_false_positive_rate)
+                }
+            };
             roc_auc_score
         }
     };
 }
-pub fn roc_auc_on_sorted_labels<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: Option<f64>) -> f64
+pub fn roc_auc_on_sorted_labels<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Order, max_false_positive_rate: Option<f64>) -> f64
 where L: Data<u8>, P: Data<f64>, W: Data<f64> {
     return match max_false_positive_rate {
-        None => roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut weights.get_iterator(), order),
-        Some(max_fpr) => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, weights, order, max_fpr)
+        None => match weights {
+            Some(w) => roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut w.get_iterator(), order),
+            None => roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut ConstWeight::one().get_iterator(), order),
+        }
+        Some(max_fpr) => match weights {
+            Some(w) => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, w, order, max_fpr),
+            None => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, &ConstWeight::one(), order, max_fpr),
+        }
     };
 }
 
@@ -422,22 +435,28 @@ pub fn average_precision_py<'py>(
 }
 
 #[pyfunction(name = "roc_auc")]
-#[pyo3(signature = (labels, predictions, *, weights, order=None, max_false_positive_rate=None))]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_false_positive_rate=None))]
 pub fn roc_auc_py<'py>(
     _py: Python<'py>,
     labels: PyReadonlyArray1<'py, u8>,
     predictions: PyReadonlyArray1<'py, f64>,
-    weights: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
     order: Option<PyOrder>,
     max_false_positive_rate: Option<f64>,
 ) -> Result<f64, NotContiguousError> {
     let o = order.map(py_order_as_order);
-    let ap = if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weights.as_slice()) {
-        roc_auc_with_order(&l, &p, &w, o, max_false_positive_rate)
-    } else {
-        roc_auc_with_order(&labels.as_array(), &predictions.as_array(), &weights.as_array(), o, max_false_positive_rate)
+    let ap = match weights {
+        Some(weight) => if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weight.as_slice()) {
+            roc_auc_with_order(&l, &p, Some(&w), o, max_false_positive_rate)
+        } else {
+            roc_auc_with_order(&labels.as_array(), &predictions.as_array(), Some(&weight.as_array()), o, max_false_positive_rate)
+        }
+        None => if let (Ok(l), Ok(p)) = (labels.as_slice(), predictions.as_slice()) {
+            roc_auc_with_order(&l, &p, None::<&Vec<f64>>, o, max_false_positive_rate)
+        } else {
+            roc_auc_with_order(&labels.as_array(), &predictions.as_array(), None::<&Vec<f64>>, o, max_false_positive_rate)
+        }
     };
-
     return Ok(ap);
 }
 
