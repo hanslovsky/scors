@@ -116,10 +116,7 @@ where L: Data<u8>, P: SortableData<f64>, W: Data<f64>
     return match order {
         Some(o) => average_precision_on_sorted_labels(labels, weights, o),
         None => {
-            // let timer1 = Instant::now();
             let indices = predictions.argsort_unstable();
-            // let dt1 = timer1.elapsed();
-            // println!("Sorting took {}ms", dt1.as_millis());
             let sorted_labels = select(labels, &indices);
             let sorted_weights = select(weights, &indices);
             let ap = average_precision_on_sorted_labels(&sorted_labels, &sorted_weights, Order::DESCENDING);
@@ -143,8 +140,7 @@ where L: DoubleEndedIterator<Item = u8>, W: DoubleEndedIterator<Item = f64>
     };
 }
 
-pub fn average_precision_on_descending_iterator(labels: impl Iterator<Item = u8>, weights: impl Iterator<Item = f64>) -> f64
-{
+pub fn average_precision_on_descending_iterator(labels: impl Iterator<Item = u8>, weights: impl Iterator<Item = f64>) -> f64 {
     let mut ap: f64 = 0.0;
     let mut tps: f64 = 0.0;
     let mut fps: f64 = 0.0;
@@ -160,7 +156,87 @@ pub fn average_precision_on_descending_iterator(labels: impl Iterator<Item = u8>
     }
     return ap / tps;
 }
- 
+
+
+
+// ROC AUC score
+pub fn roc_auc<L, P, W>(labels: &L, predictions: &P, weights: &W) -> f64
+where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+{
+    return roc_auc_with_order(labels, predictions, weights, None);
+}
+
+pub fn roc_auc_with_order<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Option<Order>) -> f64
+where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+{
+    return match order {
+        Some(o) => roc_auc_on_sorted_labels(labels, predictions, weights, o),
+        None => {
+            let indices = predictions.argsort_unstable();
+            let sorted_labels = select(labels, &indices);
+            let sorted_predictions = select(predictions, &indices);
+            let sorted_weights = select(weights, &indices);
+            let ap = roc_auc_on_sorted_labels(&sorted_labels, &sorted_predictions, &sorted_weights, Order::DESCENDING);
+            ap
+        }
+    };
+}
+pub fn roc_auc_on_sorted_labels<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Order) -> f64 
+where L: Data<u8>, P: Data<f64>, W: Data<f64> {
+    return roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut weights.get_iterator(), order);
+}
+
+pub fn roc_auc_on_sorted_iterator(
+    labels: &mut impl DoubleEndedIterator<Item = u8>,
+    predictions: &mut impl DoubleEndedIterator<Item = f64>,
+    weights: &mut impl DoubleEndedIterator<Item = f64>,
+    order: Order
+) -> f64 {
+    return match order {
+        Order::ASCENDING => roc_auc_on_descending_iterator(&mut labels.rev(), &mut predictions.rev(), &mut weights.rev()),
+        Order::DESCENDING => roc_auc_on_descending_iterator(labels, predictions, weights)
+    }
+}
+
+pub fn roc_auc_on_descending_iterator(
+    labels: &mut impl Iterator<Item = u8>,
+    predictions: &mut impl Iterator<Item = f64>,
+    weights: &mut impl Iterator<Item = f64>
+) -> f64 {
+    let mut false_positives: f64 = 0.0;
+    let mut true_positives: f64 = 0.0;
+    let mut last_counted_fp = 0.0;
+    let mut last_counted_tp = 0.0;
+    let mut area_under_curve = 0.0;
+    let mut zipped = labels.zip(predictions).zip(weights).peekable();
+    loop {
+        match zipped.next() {
+            None => break,
+            Some(actual) => {
+                let l = actual.0.0 as f64;
+                let w = actual.1;
+                let wl = l * w;
+                true_positives += wl;
+                false_positives += w - wl;
+                if zipped.peek().map(|x| x.0.1 != actual.0.1).unwrap_or(true) {
+                    area_under_curve += area_under_line_segment(last_counted_fp, false_positives, last_counted_tp, true_positives);
+                    last_counted_fp = false_positives;
+                    last_counted_tp = true_positives;
+                }
+            }
+        };
+    }
+    return area_under_curve / (true_positives * false_positives);
+}
+
+fn area_under_line_segment(x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    return dx * y0 + dy * dx * 0.5;
+}
+
+
+// Python bindings
 #[pyclass(eq, eq_int, name="Order")]
 #[derive(PartialEq)]
 pub enum PyOrder {
@@ -193,25 +269,41 @@ pub fn average_precision_py<'py>(
     weights: PyReadonlyArray1<'py, f64>,
     order: Option<PyOrder>
 ) -> Result<f64, NotContiguousError> {
-    // let timer0 = Instant::now();
     let o = order.map(py_order_as_order);
     let ap = if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weights.as_slice()) {
-        // let timer = Instant::now();
         let ap = average_precision_with_order(&l, &p, &w, o);
-        // let dt = timer.elapsed();
-        // println!("AP took {}ms", dt.as_millis());
         ap
     } else {
         average_precision_with_order(&labels.as_array(), &predictions.as_array(), &weights.as_array(), o)
     };
-    // let dt_total = timer0.elapsed();
-    // println!("AP with overhead took {}ms", dt_total.as_millis());
+
+    return Ok(ap);
+}
+
+#[pyfunction(name = "roc_auc")]
+#[pyo3(signature = (labels, predictions, *, weights, order=None))]
+pub fn roc_auc_py<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u8>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: PyReadonlyArray1<'py, f64>,
+    order: Option<PyOrder>
+) -> Result<f64, NotContiguousError> {
+    let o = order.map(py_order_as_order);
+    let ap = if let (Ok(l), Ok(p), Ok(w)) = (labels.as_slice(), predictions.as_slice(), weights.as_slice()) {
+        let roc_auc = roc_auc_with_order(&l, &p, &w, o);
+        roc_auc
+    } else {
+        roc_auc_with_order(&labels.as_array(), &predictions.as_array(), &weights.as_array(), o)
+    };
+
     return Ok(ap);
 }
 
 #[pymodule(name = "_scors")]
 fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(average_precision_py, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_py, m)?).unwrap();
     m.add_class::<PyOrder>().unwrap();
     return Ok(());
 }
@@ -246,5 +338,14 @@ mod tests {
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
         let actual = average_precision_with_order(&labels, &predictions, &weights, Some(Order::DESCENDING));
         assert_eq!(actual, 0.8333333333333333);
+    }
+
+    #[test]
+    fn test_roc_auc() {
+        let labels: [u8; 4] = [1, 0, 1, 0];
+        let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
+        let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
+        let actual = roc_auc_with_order(&labels, &predictions, &weights, Some(Order::DESCENDING));
+        assert_eq!(actual, 0.75);
     }
 }
