@@ -4,10 +4,17 @@ description = "Binary classification scores in Rust"
 readme = "README.md"
 authors = [{ name = "Philipp Hanslovsky", email = "philipp.hanslovsky@gmail.com" }]
 maintainers = [{ name = "Philipp Hanslovsky", email = "philipp.hanslovsky@gmail.com" }]
-version = "0.1.5"
+version = "0.1.6.dev0"
 requires-python = ">=3.10,<3.13"  # For 3.13, I see errors in CI: error[E0432]: unresolved import `pyo3::sync::GILProtected`
 license = "MIT"
 license-files = ["LICENSE"]
+
+[project.urls]
+Homepage = "https://github.com/hanslovsky/scors"
+Documentation = "https://github.com/hanslovsky/scors"
+Repository = "https://github.com/hanslovsky/scors"
+Issues = "https://github.com/hanslovsky/scors/issues"
+
 
 [dependencies]
 
