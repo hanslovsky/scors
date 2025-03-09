@@ -1,5 +1,5 @@
 use ndarray::{ArrayView,Ix1};
-use numpy::{Element,NotContiguousError,PyArray1,PyArrayDescr,PyArrayDescrMethods,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
+use numpy::{Element,PyArray1,PyArrayDescr,PyArrayDescrMethods,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
 use pyo3::Bound;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -272,20 +272,20 @@ pub fn average_precision_on_descending_iterator<B: BinaryLabel>(labels: impl Ite
 
 
 // ROC AUC score
-pub fn roc_auc<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
-where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+pub fn roc_auc<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
+where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>
 {
     return roc_auc_with_order(labels, predictions, weights, None, None);
 }
 
-pub fn roc_auc_max_fpr<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, max_false_positive_rate: Option<f64>) -> f64
-where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+pub fn roc_auc_max_fpr<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, max_false_positive_rate: Option<f64>) -> f64
+where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>
 {
     return roc_auc_with_order(labels, predictions, weights, None, max_false_positive_rate);
 }
 
-pub fn roc_auc_with_order<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
-where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+pub fn roc_auc_with_order<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
+where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>
 {
     return match order {
         Some(o) => roc_auc_on_sorted_labels(labels, predictions, weights, o, max_false_positive_rate),
@@ -306,8 +306,8 @@ where L: Data<u8>, P: SortableData<f64> + Data<f64>, W: Data<f64>
         }
     };
 }
-pub fn roc_auc_on_sorted_labels<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Order, max_false_positive_rate: Option<f64>) -> f64
-where L: Data<u8>, P: Data<f64>, W: Data<f64> {
+pub fn roc_auc_on_sorted_labels<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Order, max_false_positive_rate: Option<f64>) -> f64
+where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64> {
     return match max_false_positive_rate {
         None => match weights {
             Some(w) => roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut w.get_iterator(), order),
@@ -320,8 +320,8 @@ where L: Data<u8>, P: Data<f64>, W: Data<f64> {
     };
 }
 
-pub fn roc_auc_on_sorted_iterator(
-    labels: &mut impl DoubleEndedIterator<Item = u8>,
+pub fn roc_auc_on_sorted_iterator<B: BinaryLabel>(
+    labels: &mut impl DoubleEndedIterator<Item = B>,
     predictions: &mut impl DoubleEndedIterator<Item = f64>,
     weights: &mut impl DoubleEndedIterator<Item = f64>,
     order: Order
@@ -332,8 +332,8 @@ pub fn roc_auc_on_sorted_iterator(
     }
 }
 
-pub fn roc_auc_on_descending_iterator(
-    labels: &mut impl Iterator<Item = u8>,
+pub fn roc_auc_on_descending_iterator<B: BinaryLabel>(
+    labels: &mut impl Iterator<Item = B>,
     predictions: &mut impl Iterator<Item = f64>,
     weights: &mut impl Iterator<Item = f64>
 ) -> f64 {
@@ -347,7 +347,7 @@ pub fn roc_auc_on_descending_iterator(
         match zipped.next() {
             None => break,
             Some(actual) => {
-                let l = actual.0.0 as f64;
+                let l = f64::from(actual.0.0.get_value());
                 let w = actual.1;
                 let wl = l * w;
                 true_positives += wl;
@@ -369,22 +369,22 @@ fn area_under_line_segment(x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     return dx * y0 + dy * dx * 0.5;
 }
 
-fn get_positive_sum(
-    labels: impl Iterator<Item = u8>,
+fn get_positive_sum<B: BinaryLabel>(
+    labels: impl Iterator<Item = B>,
     weights: impl Iterator<Item = f64>
 ) -> (f64, f64) {
     let mut false_positives = 0f64;
     let mut true_positives = 0f64;
     for (label, weight) in labels.zip(weights) {
-        let lw = weight * (label as f64);
+        let lw = weight * f64::from(label.get_value());
         false_positives += weight - lw;
         true_positives += lw;
     }
     return (false_positives, true_positives);
 }
 
-pub fn roc_auc_on_sorted_with_fp_cutoff<L, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: f64) -> f64
-where L: Data<u8>, P: Data<f64>, W: Data<f64> {
+pub fn roc_auc_on_sorted_with_fp_cutoff<B, L, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: f64) -> f64
+where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64> {
     // TODO validate max_fpr
     let (fps, tps) = get_positive_sum(labels.get_iterator(), weights.get_iterator());
     let mut l_it = labels.get_iterator();
@@ -397,8 +397,8 @@ where L: Data<u8>, P: Data<f64>, W: Data<f64> {
 }
     
 
-fn roc_auc_on_descending_iterator_with_fp_cutoff(
-    labels: &mut impl Iterator<Item = u8>,
+fn roc_auc_on_descending_iterator_with_fp_cutoff<B: BinaryLabel>(
+    labels: &mut impl Iterator<Item = B>,
     predictions: &mut impl Iterator<Item = f64>,
     weights: &mut impl Iterator<Item = f64>,
     false_positive_sum: f64,
@@ -416,7 +416,7 @@ fn roc_auc_on_descending_iterator_with_fp_cutoff(
         match zipped.next() {
             None => break,
             Some(actual) => {
-                let l = actual.0.0 as f64;
+                let l = f64::from(actual.0.0.get_value());
                 let w = actual.1;
                 let wl = l * w;
                 let next_tp = true_positives + wl;
@@ -553,20 +553,20 @@ pub fn average_precision_py<'py>(
     return Err(PyTypeError::new_err(format!("Unsupported dtype for labels: {}. Supported dtypes are bool, uint8, uint16, uint32, uint64, in8, int16, int32, int64", label_dtype)));
 }
 
-#[pyfunction(name = "roc_auc")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_false_positive_rate=None))]
-pub fn roc_auc_py<'py>(
+fn roc_auc_py_generic<'py, B>(
     py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u8>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
+    labels: &PyReadonlyArray1<'py, B>,
+    predictions: &PyReadonlyArray1<'py, f64>,
+    weights: &Option<PyReadonlyArray1<'py, f64>>,
+    order: &Option<PyOrder>,
     max_false_positive_rate: Option<f64>,
-) -> Result<f64, NotContiguousError> {
+) -> f64
+where B: BinaryLabel + Element
+{
     let labels = labels.as_array();
     let predictions = predictions.as_array();
     let order = order.map(py_order_as_order);
-    let ap = match weights {
+    let auc = match weights {
         Some(weight) => {
             let weights = weight.as_array();
             py.allow_threads(move || {
@@ -577,7 +577,70 @@ pub fn roc_auc_py<'py>(
             roc_auc_with_order(&labels, &predictions, None::<&Vec<f64>>, order, max_false_positive_rate)
         })
     };
-    return Ok(ap);
+    return auc;
+}
+
+fn roc_auc_py_match_run<'py, T>(
+    py: Python<'py>,
+    labels: &Bound<'py, PyUntypedArray>,
+    predictions: &PyReadonlyArray1<'py, f64>,
+    weights: &Option<PyReadonlyArray1<'py, f64>>,
+    order: &Option<PyOrder>,
+    max_false_positive_rate: Option<f64>,
+    dt: &Bound<'py, PyArrayDescr>
+) -> Option<f64>
+where T: Element + BinaryLabel
+{
+    return if dt.is_equiv_to(&dtype::<T>(py)) {
+        let labels = labels.downcast::<PyArray1<T>>().unwrap().readonly();
+        Some(roc_auc_py_generic(py, &labels.readonly(), predictions, weights, order, max_false_positive_rate))
+    } else {
+        None
+    }
+}
+
+#[pyfunction(name = "roc_auc")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_false_positive_rate=None))]
+pub fn roc_auc_py<'py>(
+    py: Python<'py>,
+    labels: &Bound<'py, PyUntypedArray>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_false_positive_rate: Option<f64>,
+) -> PyResult<f64> {
+    if labels.ndim() != 1 {
+        return Err(PyTypeError::new_err(format!("Expected 1-dimensional array for labels but found {} dimenisons.", labels.ndim())));
+    }
+    let label_dtype = labels.dtype();
+    if let Some(auc) = roc_auc_py_match_run::<bool>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    else if let Some(auc) = roc_auc_py_match_run::<u8>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    else if let Some(auc) = roc_auc_py_match_run::<i8>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    else if let Some(auc) = roc_auc_py_match_run::<u16>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    else if let Some(auc) = roc_auc_py_match_run::<i16>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    else if let Some(auc) = roc_auc_py_match_run::<u32>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    else if let Some(auc) = roc_auc_py_match_run::<i32>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    else if let Some(auc) = roc_auc_py_match_run::<u64>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    else if let Some(auc) = roc_auc_py_match_run::<i64>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
+        return Ok(auc)
+    }
+    return Err(PyTypeError::new_err(format!("Unsupported dtype for labels: {}. Supported dtypes are bool, uint8, uint16, uint32, uint64, in8, int16, int32, int64", label_dtype)));
 }
 
 #[pymodule(name = "_scors")]
