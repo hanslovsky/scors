@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from numpy.typing import DTypeLike
 
 from sklearn.metrics import average_precision_score as ap_skl
 
@@ -17,12 +18,13 @@ def test_sklearn_dosctring():
 
 @pytest.mark.parametrize("n", [10, 100, 1_000, 10_000])
 @pytest.mark.parametrize("with_weights", [True, False])
-def test_compare_sklearn_random(n: int, with_weights: bool):
+@pytest.mark.parametrize("dtype", [bool, np.uint8, np.uint16, np.uint32, np.uint64, np.int8, np.int16, np.int32, np.int64])
+def test_compare_sklearn_random(n: int, with_weights: bool, dtype: DTypeLike):
     rng = np.random.default_rng(42)
     # TODO sklearn returns 0.0 if all labels are negative,
     #      my implementation returns nan.
     #      Figure out if we want to diverge from sklearn here.
-    labels = np.require((np.arange(n) / n) >= 0.9, dtype=np.uint8)
+    labels = np.require((np.arange(n) / n) >= 0.9, dtype=dtype)
     predictions = rng.random(labels.shape, dtype=np.float64)
     weights = rng.random(labels.shape, dtype=np.float64) if with_weights else None
     score_skl = ap_skl(labels, predictions, sample_weight=weights)
