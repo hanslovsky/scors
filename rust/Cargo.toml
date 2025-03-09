@@ -4,6 +4,10 @@ version = "0.1.6"
 edition = "2021"
 license = "MIT"
 description = "Scores for binary classifier evaluation"
+readme = "../README.md"
+repository = "https://github.com/hanslovsky/scors"
+homepage = "https://github.com/hanslovsky/scors"
+
 
 [lib]
 name = "_scors"
