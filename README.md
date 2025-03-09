@@ -50,3 +50,7 @@ This is a summary of all the optimizations I implemented (or plan to):
 | `average_precision_score` | `average_precision` |
 | `roc_auc_score`           | `roc_auc`           |
 
+## Is It Actually Faster?
+
+**TODO**: Benchmarks
+
