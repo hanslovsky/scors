@@ -80,6 +80,10 @@ if __name__ == "__main__":
             ax2.set_xscale("log")
         ax1.legend()
         ax2.legend()
+        ax1.set_ylabel("Mean Runtime [s]")
+        ax1.set_xlabel("Sample Size")
+        ax2.set_ylabel("Mean Runtime / Mean Runtime sklearn")
+        ax2.set_xlabel("Sample Size")
 
     plt.show()
     
