@@ -17,6 +17,6 @@ def test_compare_sklearn_random(max_fpr: float | None, n: int, with_weights: boo
     predictions = rng.random(labels.shape, dtype=np.float64)
     weights = rng.random(labels.shape, dtype=np.float64) if with_weights else None
     score_skl = roc_auc_skl(labels, predictions, sample_weight=weights, max_fpr=max_fpr)
-    score = roc_auc(labels, predictions, weights=weights, max_false_positive_rate=max_fpr)
+    score = roc_auc(labels, predictions, weights=weights, max_fpr=max_fpr)
     assert np.isclose(score_skl, score), f"{score} != {score_skl}"
 
