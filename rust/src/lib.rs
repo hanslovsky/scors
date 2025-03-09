@@ -1,8 +1,11 @@
 use ndarray::{ArrayView,Ix1};
-use numpy::{NotContiguousError,PyReadonlyArray1};
-use pyo3::prelude::*; // {PyModule,PyResult,Python,pymodule};
+use numpy::{Element,NotContiguousError,PyArray1,PyArrayDescr,PyArrayDescrMethods,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
+use pyo3::Bound;
+use pyo3::exceptions::PyTypeError;
+use pyo3::prelude::*;
 use std::iter::DoubleEndedIterator;
 
+#[derive(Clone, Copy)]
 pub enum Order {
     ASCENDING,
     DESCENDING
@@ -128,6 +131,72 @@ impl SortableData<f64> for ArrayView<'_, f64, Ix1> {
     }
 }
 
+// struct IndexView<'a, T, D> where T: Clone, D: Data<T>{
+//     data: &'a D,
+//     indices: &'a Vec<usize>,
+// }
+
+// impl <'a, T: Clone> Data<T> for IndexView<'a, T> {
+// }
+
+pub trait BinaryLabel: Clone + Copy {
+    fn get_value(&self) -> bool;
+}
+
+impl BinaryLabel for bool {
+    fn get_value(&self) -> bool {
+        return self.clone();
+    }
+}
+
+impl BinaryLabel for u8 {
+    fn get_value(&self) -> bool {
+        return (self & 1) == 1;
+    }
+}
+
+impl BinaryLabel for u16 {
+    fn get_value(&self) -> bool {
+        return (self & 1) == 1;
+    }
+}
+
+impl BinaryLabel for u32 {
+    fn get_value(&self) -> bool {
+        return (self & 1) == 1;
+    }
+}
+
+impl BinaryLabel for u64 {
+    fn get_value(&self) -> bool {
+        return (self & 1) == 1;
+    }
+}
+
+impl BinaryLabel for i8 {
+    fn get_value(&self) -> bool {
+        return (self & 1) == 1;
+    }
+}
+
+impl BinaryLabel for i16 {
+    fn get_value(&self) -> bool {
+        return (self & 1) == 1;
+    }
+}
+
+impl BinaryLabel for i32 {
+    fn get_value(&self) -> bool {
+        return (self & 1) == 1;
+    }
+}
+
+impl BinaryLabel for i64 {
+    fn get_value(&self) -> bool {
+        return (self & 1) == 1;
+    }
+}
+
 fn select<T, I>(slice: &I, indices: &[usize]) -> Vec<T>
 where T: Copy, I: Data<T>
 {
@@ -139,14 +208,14 @@ where T: Copy, I: Data<T>
     return selection;
 }
 
-pub fn average_precision<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
-where L: Data<u8>, P: SortableData<f64>, W: Data<f64>
+pub fn average_precision<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
+where B: BinaryLabel, L: Data<B>, P: SortableData<f64>, W: Data<f64>
 {
     return average_precision_with_order(labels, predictions, weights, None);
 }
 
-pub fn average_precision_with_order<L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
-where L: Data<u8>, P: SortableData<f64>, W: Data<f64>
+pub fn average_precision_with_order<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
+where B: BinaryLabel, L: Data<B>, P: SortableData<f64>, W: Data<f64>
 {
     return match order {
         Some(o) => average_precision_on_sorted_labels(labels, weights, o),
@@ -165,8 +234,8 @@ where L: Data<u8>, P: SortableData<f64>, W: Data<f64>
     };
 }
 
-pub fn average_precision_on_sorted_labels<L, W>(labels: &L, weights: Option<&W>, order: Order) -> f64
-where L: Data<u8>, W: Data<f64>
+pub fn average_precision_on_sorted_labels<B, L, W>(labels: &L, weights: Option<&W>, order: Order) -> f64
+where B: BinaryLabel, L: Data<B>, W: Data<f64>
 {
     return match weights {
         None => average_precision_on_iterator(labels.get_iterator(), ConstWeight::one(), order),
@@ -174,8 +243,8 @@ where L: Data<u8>, W: Data<f64>
     };
 }
 
-pub fn average_precision_on_iterator<L, W>(labels: L, weights: W, order: Order) -> f64
-where L: DoubleEndedIterator<Item = u8>, W: DoubleEndedIterator<Item = f64>
+pub fn average_precision_on_iterator<B, L, W>(labels: L, weights: W, order: Order) -> f64
+where B: BinaryLabel, L: DoubleEndedIterator<Item = B>, W: DoubleEndedIterator<Item = f64>
 {
     return match order {
         Order::ASCENDING => average_precision_on_descending_iterator(labels.rev(), weights.rev()),
@@ -183,14 +252,14 @@ where L: DoubleEndedIterator<Item = u8>, W: DoubleEndedIterator<Item = f64>
     };
 }
 
-pub fn average_precision_on_descending_iterator(labels: impl Iterator<Item = u8>, weights: impl Iterator<Item = f64>) -> f64 {
+pub fn average_precision_on_descending_iterator<B: BinaryLabel>(labels: impl Iterator<Item = B>, weights: impl Iterator<Item = f64>) -> f64 {
     let mut ap: f64 = 0.0;
     let mut tps: f64 = 0.0;
     let mut fps: f64 = 0.0;
     for (label, weight) in labels.zip(weights) {
         let w: f64 = weight;
-        let l: u8 = label;
-        let tp = w * (l as f64);
+        let l: bool = label.get_value();
+        let tp = w * f64::from(l);
         tps += tp;
         fps += weight - tp;
         let ps = tps + fps;
@@ -382,19 +451,10 @@ fn roc_auc_on_descending_iterator_with_fp_cutoff(
 
 // Python bindings
 #[pyclass(eq, eq_int, name="Order")]
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum PyOrder {
     ASCENDING,
     DESCENDING
-}
-
-impl Clone for PyOrder {
-    fn clone(&self) -> Self {
-        match self {
-            PyOrder::ASCENDING => PyOrder::ASCENDING,
-            PyOrder::DESCENDING => PyOrder::DESCENDING
-        }
-    }
 }
 
 fn py_order_as_order(order: PyOrder) -> Order {
@@ -404,15 +464,15 @@ fn py_order_as_order(order: PyOrder) -> Order {
     }
 }
 
-#[pyfunction(name = "average_precision")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_py<'py>(
+fn average_precision_py_generic<'py, B>(
     py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u8>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> Result<f64, NotContiguousError> {
+    labels: &PyReadonlyArray1<'py, B>,
+    predictions: &PyReadonlyArray1<'py, f64>,
+    weights: &Option<PyReadonlyArray1<'py, f64>>,
+    order: &Option<PyOrder>
+) -> f64
+where B: BinaryLabel + Element
+{
     let labels = labels.as_array();
     let predictions = predictions.as_array();
     let order = order.map(py_order_as_order);
@@ -425,11 +485,72 @@ pub fn average_precision_py<'py>(
         },
         None => {
             py.allow_threads(move || {
-                average_precision_with_order(&labels, &predictions, None::<&Vec<f64>>, order)
+                average_precision_with_order(&labels, &predictions, None::<&ArrayView<'_, f64, Ix1>>, order)
             })
         }
     };
-    return Ok(ap);
+    return ap;
+}
+
+fn average_precision_py_match_run<'py, T>(
+    py: Python<'py>,
+    labels: &Bound<'py, PyUntypedArray>,
+    predictions: &PyReadonlyArray1<'py, f64>,
+    weights: &Option<PyReadonlyArray1<'py, f64>>,
+    order: &Option<PyOrder>,
+    dt: &Bound<'py, PyArrayDescr>
+) -> Option<f64>
+where T: Element + BinaryLabel
+{
+    return if dt.is_equiv_to(&dtype::<T>(py)) {
+        let labels = labels.downcast::<PyArray1<T>>().unwrap().readonly();
+        Some(average_precision_py_generic(py, &labels.readonly(), predictions, weights, order))
+    } else {
+        None
+    }
+}
+
+#[pyfunction(name = "average_precision")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_py<'py>(
+    py: Python<'py>,
+    labels: &Bound<'py, PyUntypedArray>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> PyResult<f64> {
+    if labels.ndim() != 1 {
+        return Err(PyTypeError::new_err(format!("Expected 1-dimensional array for labels but found {} dimenisons.", labels.ndim())));
+    }
+    let label_dtype = labels.dtype();
+    if let Some(ap) = average_precision_py_match_run::<bool>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    else if let Some(ap) = average_precision_py_match_run::<u8>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    else if let Some(ap) = average_precision_py_match_run::<i8>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    else if let Some(ap) = average_precision_py_match_run::<u16>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    else if let Some(ap) = average_precision_py_match_run::<i16>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    else if let Some(ap) = average_precision_py_match_run::<u32>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    else if let Some(ap) = average_precision_py_match_run::<i32>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    else if let Some(ap) = average_precision_py_match_run::<u64>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    else if let Some(ap) = average_precision_py_match_run::<i64>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+        return Ok(ap)
+    }
+    return Err(PyTypeError::new_err(format!("Unsupported dtype for labels: {}. Supported dtypes are bool, uint8, uint16, uint32, uint64, in8, int16, int32, int64", label_dtype)));
 }
 
 #[pyfunction(name = "roc_auc")]
@@ -477,7 +598,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         // let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision_on_sorted_labels(&labels, &weights, Order::DESCENDING);
+        let actual = average_precision_on_sorted_labels(&labels, Some(&weights), Order::DESCENDING);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -486,7 +607,7 @@ mod tests {
         let labels: [u8; 4] = [0, 0, 1, 1];
         let predictions: [f64; 4] = [0.1, 0.4, 0.35, 0.8];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision_with_order(&labels, &predictions, &weights, None);
+        let actual = average_precision_with_order(&labels, &predictions, Some(&weights), None);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -495,7 +616,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision_with_order(&labels, &predictions, &weights, Some(Order::DESCENDING));
+        let actual = average_precision_with_order(&labels, &predictions, Some(&weights), Some(Order::DESCENDING));
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -504,7 +625,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = roc_auc_with_order(&labels, &predictions, &weights, Some(Order::DESCENDING));
+        let actual = roc_auc_with_order(&labels, &predictions, Some(&weights), Some(Order::DESCENDING), None);
         assert_eq!(actual, 0.75);
     }
 }
