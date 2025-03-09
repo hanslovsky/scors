@@ -2,6 +2,7 @@ use ndarray::{ArrayView,Ix1};
 use numpy::{Element,PyArray1,PyArrayDescr,PyArrayDescrMethods,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
 use pyo3::Bound;
 use pyo3::exceptions::PyTypeError;
+use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use std::iter::DoubleEndedIterator;
 
@@ -464,51 +465,135 @@ fn py_order_as_order(order: PyOrder) -> Order {
     }
 }
 
-fn average_precision_py_generic<'py, B>(
-    py: Python<'py>,
-    labels: &PyReadonlyArray1<'py, B>,
-    predictions: &PyReadonlyArray1<'py, f64>,
-    weights: &Option<PyReadonlyArray1<'py, f64>>,
-    order: &Option<PyOrder>
-) -> f64
-where B: BinaryLabel + Element
-{
-    let labels = labels.as_array();
-    let predictions = predictions.as_array();
-    let order = order.map(py_order_as_order);
-    let ap = match weights {
-        Some(w) => {
-            let weights = w.as_array();
-            py.allow_threads(move || {
-                average_precision_with_order(&labels, &predictions, Some(&weights), order)
-            })
-        },
-        None => {
-            py.allow_threads(move || {
-                average_precision_with_order(&labels, &predictions, None::<&ArrayView<'_, f64, Ix1>>, order)
-            })
-        }
-    };
-    return ap;
-}
 
-fn average_precision_py_match_run<'py, T>(
-    py: Python<'py>,
-    labels: &Bound<'py, PyUntypedArray>,
-    predictions: &PyReadonlyArray1<'py, f64>,
-    weights: &Option<PyReadonlyArray1<'py, f64>>,
-    order: &Option<PyOrder>,
-    dt: &Bound<'py, PyArrayDescr>
-) -> Option<f64>
-where T: Element + BinaryLabel
-{
-    return if dt.is_equiv_to(&dtype::<T>(py)) {
-        let labels = labels.downcast::<PyArray1<T>>().unwrap().readonly();
-        Some(average_precision_py_generic(py, &labels.readonly(), predictions, weights, order))
-    } else {
-        None
+trait PyScore: Ungil + Sync {
+
+    fn score<B, L, P, W>(&self, labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
+    where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>;
+
+    fn score_py_generic<'py, B>(
+        &self,
+        py: Python<'py>,
+        labels: &PyReadonlyArray1<'py, B>,
+        predictions: &PyReadonlyArray1<'py, f64>,
+        weights: &Option<PyReadonlyArray1<'py, f64>>,
+        order: &Option<PyOrder>,
+    ) -> f64
+    where B: BinaryLabel + Element
+    {
+        let labels = labels.as_array();
+        let predictions = predictions.as_array();
+        let order = order.map(py_order_as_order);
+        let score = match weights {
+            Some(weight) => {
+                let weights = weight.as_array();
+                py.allow_threads(move || {
+                    self.score(&labels, &predictions, Some(&weights), order)
+                })
+            },
+            None => py.allow_threads(move || {
+                self.score(&labels, &predictions, None::<&Vec<f64>>, order)
+            })
+        };
+        return score;
+    }
+
+    fn score_py_match_run<'py, T>(
+        &self,
+        py: Python<'py>,
+        labels: &Bound<'py, PyUntypedArray>,
+        predictions: &PyReadonlyArray1<'py, f64>,
+        weights: &Option<PyReadonlyArray1<'py, f64>>,
+        order: &Option<PyOrder>,
+        dt: &Bound<'py, PyArrayDescr>
+    ) -> Option<f64>
+    where T: Element + BinaryLabel
+    {
+        return if dt.is_equiv_to(&dtype::<T>(py)) {
+            let labels = labels.downcast::<PyArray1<T>>().unwrap().readonly();
+            Some(self.score_py_generic(py, &labels.readonly(), predictions, weights, order))
+        } else {
+            None
+        };
+    }
+    
+    fn score_py<'py>(
+        &self,
+        py: Python<'py>,
+        labels: &Bound<'py, PyUntypedArray>,
+        predictions: PyReadonlyArray1<'py, f64>,
+        weights: Option<PyReadonlyArray1<'py, f64>>,
+        order: Option<PyOrder>,
+    ) -> PyResult<f64> {
+        if labels.ndim() != 1 {
+            return Err(PyTypeError::new_err(format!("Expected 1-dimensional array for labels but found {} dimenisons.", labels.ndim())));
+        }
+        let label_dtype = labels.dtype();
+        if let Some(score) = self.score_py_match_run::<bool>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        else if let Some(score) = self.score_py_match_run::<u8>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        else if let Some(score) = self.score_py_match_run::<i8>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        else if let Some(score) = self.score_py_match_run::<u16>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        else if let Some(score) = self.score_py_match_run::<i16>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        else if let Some(score) = self.score_py_match_run::<u32>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        else if let Some(score) = self.score_py_match_run::<i32>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        else if let Some(score) = self.score_py_match_run::<u64>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        else if let Some(score) = self.score_py_match_run::<i64>(py, &labels, &predictions, &weights, &order, &label_dtype) {
+            return Ok(score)
+        }
+        return Err(PyTypeError::new_err(format!("Unsupported dtype for labels: {}. Supported dtypes are bool, uint8, uint16, uint32, uint64, in8, int16, int32, int64", label_dtype)));
     }
 }
+
+struct PyAveragePrecision {
+    
+}
+
+impl PyAveragePrecision{
+    fn new() -> Self {
+        return PyAveragePrecision {};
+    }
+}
+
+impl PyScore for PyAveragePrecision {
+    fn score<B, L, P, W>(&self, labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
+    where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64> {
+        return average_precision_with_order(labels, predictions, weights, order);
+    }
+}
+
+struct PyRocAuc {
+    max_fpr: Option<f64>
+}
+
+impl PyRocAuc {
+    fn new(max_fpr: Option<f64>) -> Self {
+        return PyRocAuc { max_fpr: max_fpr };
+    }
+}
+
+impl PyScore for PyRocAuc {
+    fn score<B, L, P, W>(&self, labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
+    where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64> {
+        return roc_auc_with_order(labels, predictions, weights, order, self.max_fpr);
+    }
+}
+
 
 #[pyfunction(name = "average_precision")]
 #[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
@@ -519,128 +604,20 @@ pub fn average_precision_py<'py>(
     weights: Option<PyReadonlyArray1<'py, f64>>,
     order: Option<PyOrder>
 ) -> PyResult<f64> {
-    if labels.ndim() != 1 {
-        return Err(PyTypeError::new_err(format!("Expected 1-dimensional array for labels but found {} dimenisons.", labels.ndim())));
-    }
-    let label_dtype = labels.dtype();
-    if let Some(ap) = average_precision_py_match_run::<bool>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    else if let Some(ap) = average_precision_py_match_run::<u8>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    else if let Some(ap) = average_precision_py_match_run::<i8>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    else if let Some(ap) = average_precision_py_match_run::<u16>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    else if let Some(ap) = average_precision_py_match_run::<i16>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    else if let Some(ap) = average_precision_py_match_run::<u32>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    else if let Some(ap) = average_precision_py_match_run::<i32>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    else if let Some(ap) = average_precision_py_match_run::<u64>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    else if let Some(ap) = average_precision_py_match_run::<i64>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-        return Ok(ap)
-    }
-    return Err(PyTypeError::new_err(format!("Unsupported dtype for labels: {}. Supported dtypes are bool, uint8, uint16, uint32, uint64, in8, int16, int32, int64", label_dtype)));
-}
-
-fn roc_auc_py_generic<'py, B>(
-    py: Python<'py>,
-    labels: &PyReadonlyArray1<'py, B>,
-    predictions: &PyReadonlyArray1<'py, f64>,
-    weights: &Option<PyReadonlyArray1<'py, f64>>,
-    order: &Option<PyOrder>,
-    max_false_positive_rate: Option<f64>,
-) -> f64
-where B: BinaryLabel + Element
-{
-    let labels = labels.as_array();
-    let predictions = predictions.as_array();
-    let order = order.map(py_order_as_order);
-    let auc = match weights {
-        Some(weight) => {
-            let weights = weight.as_array();
-            py.allow_threads(move || {
-                roc_auc_with_order(&labels, &predictions, Some(&weights), order, max_false_positive_rate)
-            })
-        },
-        None => py.allow_threads(move || {
-            roc_auc_with_order(&labels, &predictions, None::<&Vec<f64>>, order, max_false_positive_rate)
-        })
-    };
-    return auc;
-}
-
-fn roc_auc_py_match_run<'py, T>(
-    py: Python<'py>,
-    labels: &Bound<'py, PyUntypedArray>,
-    predictions: &PyReadonlyArray1<'py, f64>,
-    weights: &Option<PyReadonlyArray1<'py, f64>>,
-    order: &Option<PyOrder>,
-    max_false_positive_rate: Option<f64>,
-    dt: &Bound<'py, PyArrayDescr>
-) -> Option<f64>
-where T: Element + BinaryLabel
-{
-    return if dt.is_equiv_to(&dtype::<T>(py)) {
-        let labels = labels.downcast::<PyArray1<T>>().unwrap().readonly();
-        Some(roc_auc_py_generic(py, &labels.readonly(), predictions, weights, order, max_false_positive_rate))
-    } else {
-        None
-    }
+    return PyAveragePrecision::new().score_py(py, labels, predictions, weights, order);
 }
 
 #[pyfunction(name = "roc_auc")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_false_positive_rate=None))]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
 pub fn roc_auc_py<'py>(
     py: Python<'py>,
     labels: &Bound<'py, PyUntypedArray>,
     predictions: PyReadonlyArray1<'py, f64>,
     weights: Option<PyReadonlyArray1<'py, f64>>,
     order: Option<PyOrder>,
-    max_false_positive_rate: Option<f64>,
+    max_fpr: Option<f64>,
 ) -> PyResult<f64> {
-    if labels.ndim() != 1 {
-        return Err(PyTypeError::new_err(format!("Expected 1-dimensional array for labels but found {} dimenisons.", labels.ndim())));
-    }
-    let label_dtype = labels.dtype();
-    if let Some(auc) = roc_auc_py_match_run::<bool>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    else if let Some(auc) = roc_auc_py_match_run::<u8>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    else if let Some(auc) = roc_auc_py_match_run::<i8>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    else if let Some(auc) = roc_auc_py_match_run::<u16>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    else if let Some(auc) = roc_auc_py_match_run::<i16>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    else if let Some(auc) = roc_auc_py_match_run::<u32>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    else if let Some(auc) = roc_auc_py_match_run::<i32>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    else if let Some(auc) = roc_auc_py_match_run::<u64>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    else if let Some(auc) = roc_auc_py_match_run::<i64>(py, &labels, &predictions, &weights, &order, max_false_positive_rate, &label_dtype) {
-        return Ok(auc)
-    }
-    return Err(PyTypeError::new_err(format!("Unsupported dtype for labels: {}. Supported dtypes are bool, uint8, uint16, uint32, uint64, in8, int16, int32, int64", label_dtype)));
+    return PyRocAuc::new(max_fpr).score_py(py, labels, predictions, weights, order);
 }
 
 #[pymodule(name = "_scors")]
