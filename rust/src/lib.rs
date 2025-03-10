@@ -267,6 +267,9 @@ pub fn average_precision_on_descending_iterator<B: BinaryLabel>(labels: impl Ite
         let precision = tps / ps;
         ap += tp * precision;
     }
+    // Special case for tps == 0 following sklearn
+    // https://github.com/scikit-learn/scikit-learn/blob/5cce87176a530d2abea45b5a7e5a4d837c481749/sklearn/metrics/_ranking.py#L1032-L1039
+    // I.e. if tps is 0.0, there are no positive samples in labels: Either all labels are 0, or all weights (for positive labels) are 0
     return if tps == 0.0 {
         0.0
     } else {
