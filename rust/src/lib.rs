@@ -267,7 +267,11 @@ pub fn average_precision_on_descending_iterator<B: BinaryLabel>(labels: impl Ite
         let precision = tps / ps;
         ap += tp * precision;
     }
-    return ap / tps;
+    return if tps == 0.0 {
+        0.0
+    } else {
+        ap / tps
+    };
 }
 
 
