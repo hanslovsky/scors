@@ -5,6 +5,7 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use std::iter::DoubleEndedIterator;
+use std::marker::PhantomData;
 
 #[derive(Clone, Copy)]
 pub enum Order {
@@ -198,6 +199,117 @@ impl BinaryLabel for i64 {
     }
 }
 
+struct SortedSampleDescending<'a, B, L, P, W>
+where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: IntoIterator<Item = &'a f64>, &'a W: IntoIterator<Item = &'a f64>
+{
+    labels: &'a L,
+    predictions: &'a P,
+    weights: &'a W,
+    label_type: PhantomData<B>,
+}
+
+impl <'a, B, L, P, W> SortedSampleDescending<'a, B, L, P, W>
+where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: IntoIterator<Item = &'a f64>, &'a W: IntoIterator<Item = &'a f64>
+{
+    fn new(labels: &'a L, predictions: &'a P, weights: &'a W) -> Self {
+        return SortedSampleDescending {
+            labels: labels,
+            predictions: predictions,
+            weights: weights,
+            label_type: PhantomData
+        }
+    }
+}
+
+// struct SortedSampleIterator<'a, B, L, P, W>
+// where B: BinaryLabel + Clone + 'a, L: Iterator<Item = &'a B>, P: Iterator<Item = &'a f64>, W: Iterator<Item = &' f64>
+// {
+//     labels: &'a mut L,
+//     predictions: &'a mut P,
+//     weights: &'a mut W,
+// }
+
+
+// impl <'a, B, L, P, W> Iterator for SortedSampleIterator<'a, B, L, P, W>
+// where B: BinaryLabel, L: Iterator<Item = B>, P: Iterator<Item = f64>, W: Iterator<Item = f64>
+// {
+//     type Item = (B, f64, f64);
+//     fn next(&mut self) -> Option<(B, f64, f64)> {
+//         return match (self.labels.next(), self.predictions.next(), self.weights.next()) {
+//             (Some(l), Some(p), Some(w)) => Some((l, p, w)),
+//             _ => None
+//         };
+//     }
+// }
+
+// impl <'a, B, L, P, W> IntoIterator for &SortedSampleDescending<'a, B, L, P, W>
+// where B: BinaryLabel, L: IntoIterator<Item = B>, P: IntoIterator<Item = f64>, W: IntoIterator<Item = f64> {
+//     type Item = (B, f64, f64);
+//     type IntoIter = SortedSampleIterator<'a, B, L::IntoIter, P::IntoIter, W::IntoIter>;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         let l = self.labels.into_iter();
+//         // return SortedSampleIterator {
+//         //     labels: self.labels.into_iter(),
+//         //     predictions: self.labels.into_iter(),
+//         //     weights: self.weights.into_iter(),
+//         // }
+//     }
+// }
+
+// struct CombineView<'a, B, L, P, W> 
+// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
+// {
+//     sample1: &'a SortedSampleDescending<'a, B, L, P, W>,
+//     sample2: &'a SortedSampleDescending<'a, B, L, P, W>,
+// }
+
+// impl <'a, B, L, P, W> CombineView<'a, B, L, P, W>
+// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
+// {
+//     fn new(sample1: &'a SortedSampleDescending<'a, B, L, P, W>, sample2: &'a SortedSampleDescending<'a, B, L, P, W>,) -> Self {
+//         return PairedSortedSampleDescending { sample1: sample1, sample2: sample2 };
+//     }
+// }
+
+// struct CombineViewIterator<'a, B, L, P, W>
+// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
+// {
+//     view: &'a CombineView<'a, B, L, P, W>,
+//     iterator1: impl Iterator<Item: ((B, f64), f64),
+//     iterator2: impl Iterator<Item: ((B, f64), f64),
+//     current_index: usize,
+//     num_elements: usize
+// }
+
+// impl <'a, B, L, P, W> CombineViewIterator<'a, B, L, P, W>
+// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
+// {
+//     fn new(view: &'a CombineView<'a, B, L, P, W>) -> Self {
+//         return CombineViewIerator {
+//             view: view,
+//             iterator1: view.sample1.iterator(),
+//             iterator2: view.sample2.iterator(),
+//             current_index: 0,
+//             num_elements: usize
+//         };
+//     }
+// }
+
+
+// impl <'a, B, L, P, W> Iterator for CombineViewIterator<'a, B, L, P, W>
+// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
+// {
+//     type Item = (B, f64, f64);
+//     fn next(&mut self) -> Option<(B, f64, f64)> {
+//         if self.current_index == self.num_elements {
+//             return None;
+//         }
+        
+//         return Some(self.value);
+//     }
+// }
+
 fn select<T, I>(slice: &I, indices: &[usize]) -> Vec<T>
 where T: Copy, I: Data<T>
 {
@@ -254,10 +366,33 @@ where B: BinaryLabel, L: DoubleEndedIterator<Item = B>, W: DoubleEndedIterator<I
 }
 
 pub fn average_precision_on_descending_iterator<B: BinaryLabel>(labels: impl Iterator<Item = B>, weights: impl Iterator<Item = f64>) -> f64 {
+    return average_precision_on_descending_iterators(labels.zip(weights));
+}
+
+// impl <'a, B, L, P, W> SortedSampleDescending<'a, B, L, P, W>
+// where B: BinaryLabel, L: IntoIterator<Item = B>, P: IntoIterator<Item = f64>, W: IntoIterator<Item = f64>
+
+pub fn average_precision_on_sorted_samples<'a, B, L, P, W>(l1: &'a L, p1: &'a P, w1: &'a W, l2: &'a L, p2: &'a P, w2: &'a W) -> f64
+where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: IntoIterator<Item = &'a f64>, &'a W: IntoIterator<Item = &'a f64>
+{
+    // let mut it1 = p1.into_iter();
+    let i1 = p1.into_iter().cloned().zip(l1.into_iter().cloned().zip(w1.into_iter().cloned()));
+    let i2 = p2.into_iter().cloned().zip(l2.into_iter().cloned().zip(w2.into_iter().cloned()));
+    let labels_and_weights = i1.zip(i2).map(|(t1, t2)| {
+        if t1.0 > t2.0 {
+            t1.1
+        } else {
+            t2.1
+        }
+    });
+    return average_precision_on_descending_iterators(labels_and_weights);
+}
+
+pub fn average_precision_on_descending_iterators<B: BinaryLabel>(labels_and_weights: impl Iterator<Item = (B, f64)>) -> f64 {
     let mut ap: f64 = 0.0;
     let mut tps: f64 = 0.0;
     let mut fps: f64 = 0.0;
-    for (label, weight) in labels.zip(weights) {
+    for (label, weight) in labels_and_weights {
         let w: f64 = weight;
         let l: bool = label.get_value();
         let tp = w * f64::from(l);
@@ -664,6 +799,15 @@ mod tests {
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
         let actual = average_precision_with_order(&labels, &predictions, Some(&weights), Some(Order::DESCENDING));
+        assert_eq!(actual, 0.8333333333333333);
+    }
+
+    #[test]
+    fn test_average_precision_sorted_pair() {
+        let labels: [u8; 4] = [1, 0, 1, 0];
+        let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
+        let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
+        let actual = average_precision_on_sorted_samples(&labels, &predictions, &weights, &labels, &predictions, &weights);
         assert_eq!(actual, 0.8333333333333333);
     }
 
