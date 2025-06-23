@@ -1,11 +1,13 @@
 use ndarray::{Array1,ArrayView,ArrayView2,ArrayView3,ArrayViewMut1,Ix1};
-use numpy::{Element,PyArray,PyArray1,PyArray2,PyArray3,PyArrayDescr,PyArrayDescrMethods,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
+use num;
+use numpy::{Element,PyArray,PyArray1,PyArray2,PyArray3,PyArrayDescr,PyArrayDescrMethods,PyArrayDyn,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
 use pyo3::Bound;
 use pyo3::exceptions::PyTypeError;
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use std::iter::DoubleEndedIterator;
 use std::marker::PhantomData;
+use std::ops::AddAssign;
 
 #[derive(Clone, Copy)]
 pub enum Order {
@@ -591,25 +593,25 @@ fn roc_auc_on_descending_iterator_with_fp_cutoff<B: BinaryLabel>(
     return 0.5 * (1.0 + (normalized_area_under_curve - min_area) / (max_area - min_area));
 }
 
-pub fn loo_cossim(mat: &ArrayView2<'_, f64>, replicate_sum: &mut ArrayViewMut1<'_, f64>) -> f64 {
+pub fn loo_cossim<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>, replicate_sum: &mut ArrayViewMut1<'_, F>) -> F {
     let num_replicates = mat.shape()[0];
-    let loo_weight = num_replicates as f64 - 1.0;
-    let loo_weight_factor = 1.0 / loo_weight;
+    let loo_weight = F::from(num_replicates - 1).unwrap();
+    let loo_weight_factor = F::from(1).unwrap() / loo_weight;
     for mat_replicate in mat.outer_iter() {
         for (feature, feature_sum) in mat_replicate.iter().zip(replicate_sum.iter_mut()) {
-            *feature_sum += feature;
+            *feature_sum += *feature;
         }
     }
 
-    let mut result = 0f64;
+    let mut result = F::zero();
 
     for mat_replicate in mat.outer_iter() {
-        let mut m_sqs = 0.0;
-        let mut l_sqs = 0.0;
-        let mut prod_sum = 0.0;
+        let mut m_sqs = F::zero();
+        let mut l_sqs = F::zero();
+        let mut prod_sum = F::zero();
         for (feature, feature_sum) in mat_replicate.iter().zip(replicate_sum.iter()) {
-            let m_f = feature;
-            let l_f = (feature_sum - feature) * loo_weight_factor;
+            let m_f = *feature;
+            let l_f = (*feature_sum - *feature) * loo_weight_factor;
             prod_sum += m_f * l_f;
             m_sqs += m_f * m_f;
             l_sqs += l_f * l_f;
@@ -617,19 +619,19 @@ pub fn loo_cossim(mat: &ArrayView2<'_, f64>, replicate_sum: &mut ArrayViewMut1<'
         result += prod_sum / (m_sqs * l_sqs).sqrt();
     }
 
-    return result / num_replicates as f64;
+    return result / F::from(num_replicates).unwrap();
 }
 
-pub fn loo_cossim_single(mat: &ArrayView2<'_, f64>) -> f64 {
-    let mut replicate_sum = Array1::<f64>::zeros(mat.shape()[1]);
+pub fn loo_cossim_single<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>) -> F {
+    let mut replicate_sum = Array1::<F>::zeros(mat.shape()[1]);
     return loo_cossim(mat, &mut replicate_sum.view_mut());
 }
 
-pub fn loo_cossim_many(mat: &ArrayView3<'_, f64>) -> Array1<f64> {
-    let mut cossims = Array1::<f64>::zeros(mat.shape()[0]);
-    let mut replicate_sum = Array1::<f64>::zeros(mat.shape()[2]);
+pub fn loo_cossim_many<F: num::Float + AddAssign>(mat: &ArrayView3<'_, F>) -> Array1<F> {
+    let mut cossims = Array1::<F>::zeros(mat.shape()[0]);
+    let mut replicate_sum = Array1::<F>::zeros(mat.shape()[2]);
     for (m, c) in mat.outer_iter().zip(cossims.iter_mut()) {
-        replicate_sum.fill(0.0);
+        replicate_sum.fill(F::zero());
         *c = loo_cossim(&m, &mut replicate_sum.view_mut());
     }
     return cossims;
@@ -817,20 +819,45 @@ pub fn loo_cossim_py<'py>(
     }
 
     let dt = data.dtype();
-    if !dt.is_equiv_to(&dtype::<f64>(py)) {
-        return Err(PyTypeError::new_err(format!("Currently only float64 data supported, but found {}", dt)));
+    if dt.is_equiv_to(&dtype::<f32>(py)) {
+        let typed_data = data.downcast::<PyArray2<f32>>().unwrap().readonly();
+        let array = typed_data.as_array();
+        let score = py.allow_threads(move || {
+            loo_cossim_single(&array)
+        });
+        return Ok(score as f64);
     }
-    let typed_data = data.downcast::<PyArray2<f64>>().unwrap().readonly();
-    let array = typed_data.as_array();
-    let score = py.allow_threads(move || {
-        loo_cossim_single(&array)
-    });
-    return Ok(score);
+    if dt.is_equiv_to(&dtype::<f64>(py)) {
+        let typed_data = data.downcast::<PyArray2<f64>>().unwrap().readonly();
+        let array = typed_data.as_array();
+        let score = py.allow_threads(move || {
+            loo_cossim_single(&array)
+        });
+        return Ok(score);
+    }
+    return Err(PyTypeError::new_err(format!("Only float32 and float64 data supported, but found {}", dt)));
 }
 
-#[pyfunction(name = "loo_cossim_many")]
+pub fn loo_cossim_many_generic_py<'py, F: num::Float + AddAssign + Element>(
+    py: Python<'py>,
+    data: &Bound<'py, PyArrayDyn<F>>
+) -> PyResult<Bound<'py, PyArray1<F>>> {
+    if data.ndim() != 3 {
+        return Err(PyTypeError::new_err(format!("Expected 3-dimensional array for data (outer(?) x samples x features) but found {} dimenisons.", data.ndim())));
+    }
+    let typed_data = data.downcast::<PyArray3<F>>().unwrap().readonly();
+    let array = typed_data.as_array();
+    let score = py.allow_threads(move || {
+        loo_cossim_many(&array)
+    });
+    // TODO how can we return this generically without making a copy at the end?
+    let score_py = PyArray::from_owned_array(py, score);
+    return Ok(score_py);
+}
+
+#[pyfunction(name = "loo_cossim_many_f64")]
 #[pyo3(signature = (data))]
-pub fn loo_cossim_many_py<'py>(
+pub fn loo_cossim_many_py_f64<'py>(
     py: Python<'py>,
     data: &Bound<'py, PyUntypedArray>
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
@@ -840,15 +867,28 @@ pub fn loo_cossim_many_py<'py>(
 
     let dt = data.dtype();
     if !dt.is_equiv_to(&dtype::<f64>(py)) {
-        return Err(PyTypeError::new_err(format!("Currently only float64 data supported, but found {}", dt)));
+        return Err(PyTypeError::new_err(format!("Only float64 data supported, but found {}", dt)));
     }
-    let typed_data = data.downcast::<PyArray3<f64>>().unwrap().readonly();
-    let array = typed_data.as_array();
-    let score = py.allow_threads(move || {
-        loo_cossim_many(&array)
-    });
-    let score_py = PyArray::from_owned_array(py, score);
-    return Ok(score_py);
+    let typed_data = data.downcast::<PyArrayDyn<f64>>().unwrap();
+    return loo_cossim_many_generic_py(py, typed_data);
+}
+
+#[pyfunction(name = "loo_cossim_many_f32")]
+#[pyo3(signature = (data))]
+pub fn loo_cossim_many_py_f32<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyUntypedArray>
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    if data.ndim() != 3 {
+        return Err(PyTypeError::new_err(format!("Expected 3-dimensional array for data (outer(?) x samples x features) but found {} dimenisons.", data.ndim())));
+    }
+
+    let dt = data.dtype();
+    if !dt.is_equiv_to(&dtype::<f32>(py)) {
+        return Err(PyTypeError::new_err(format!("Only float64 data supported, but found {}", dt)));
+    }
+    let typed_data = data.downcast::<PyArrayDyn<f32>>().unwrap();
+    return loo_cossim_many_generic_py(py, typed_data);
 }
 
 #[pymodule(name = "_scors")]
@@ -856,7 +896,8 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(average_precision_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(roc_auc_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_py, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(loo_cossim_many_py, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(loo_cossim_many_py_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(loo_cossim_many_py_f32, m)?).unwrap();
     m.add_class::<PyOrder>().unwrap();
     return Ok(());
 }
