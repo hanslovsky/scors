@@ -18,3 +18,5 @@ pyo3 = { version = "0.23.5", features = ["extension-module"] }
 ndarray = "0.16.1"
 numpy = "0.23.0"
 
+[dev-dependencies]
+approx = "0.5.1"
