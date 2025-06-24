@@ -885,7 +885,7 @@ pub fn loo_cossim_many_py_f32<'py>(
 
     let dt = data.dtype();
     if !dt.is_equiv_to(&dtype::<f32>(py)) {
-        return Err(PyTypeError::new_err(format!("Only float64 data supported, but found {}", dt)));
+        return Err(PyTypeError::new_err(format!("Only float32 data supported, but found {}", dt)));
     }
     let typed_data = data.downcast::<PyArrayDyn<f32>>().unwrap();
     return loo_cossim_many_generic_py(py, typed_data);
