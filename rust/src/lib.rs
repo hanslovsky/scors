@@ -1,3 +1,5 @@
+mod combine;
+
 use ndarray::{Array1,ArrayView,ArrayView2,ArrayView3,ArrayViewMut1,Ix1};
 use num;
 use numpy::{Element,PyArray,PyArray1,PyArray2,PyArray3,PyArrayDescr,PyArrayDescrMethods,PyArrayDyn,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
@@ -5,6 +7,7 @@ use pyo3::Bound;
 use pyo3::exceptions::PyTypeError;
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
+    use std::cmp::PartialOrd;
 use std::iter::DoubleEndedIterator;
 use std::marker::PhantomData;
 use std::ops::AddAssign;
@@ -135,14 +138,6 @@ impl SortableData<f64> for ArrayView<'_, f64, Ix1> {
     }
 }
 
-// struct IndexView<'a, T, D> where T: Clone, D: Data<T>{
-//     data: &'a D,
-//     indices: &'a Vec<usize>,
-// }
-
-// impl <'a, T: Clone> Data<T> for IndexView<'a, T> {
-// }
-
 pub trait BinaryLabel: Clone + Copy {
     fn get_value(&self) -> bool;
 }
@@ -222,95 +217,6 @@ where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: Int
         }
     }
 }
-
-// struct SortedSampleIterator<'a, B, L, P, W>
-// where B: BinaryLabel + Clone + 'a, L: Iterator<Item = &'a B>, P: Iterator<Item = &'a f64>, W: Iterator<Item = &' f64>
-// {
-//     labels: &'a mut L,
-//     predictions: &'a mut P,
-//     weights: &'a mut W,
-// }
-
-
-// impl <'a, B, L, P, W> Iterator for SortedSampleIterator<'a, B, L, P, W>
-// where B: BinaryLabel, L: Iterator<Item = B>, P: Iterator<Item = f64>, W: Iterator<Item = f64>
-// {
-//     type Item = (B, f64, f64);
-//     fn next(&mut self) -> Option<(B, f64, f64)> {
-//         return match (self.labels.next(), self.predictions.next(), self.weights.next()) {
-//             (Some(l), Some(p), Some(w)) => Some((l, p, w)),
-//             _ => None
-//         };
-//     }
-// }
-
-// impl <'a, B, L, P, W> IntoIterator for &SortedSampleDescending<'a, B, L, P, W>
-// where B: BinaryLabel, L: IntoIterator<Item = B>, P: IntoIterator<Item = f64>, W: IntoIterator<Item = f64> {
-//     type Item = (B, f64, f64);
-//     type IntoIter = SortedSampleIterator<'a, B, L::IntoIter, P::IntoIter, W::IntoIter>;
-
-//     fn into_iter(self) -> Self::IntoIter {
-//         let l = self.labels.into_iter();
-//         // return SortedSampleIterator {
-//         //     labels: self.labels.into_iter(),
-//         //     predictions: self.labels.into_iter(),
-//         //     weights: self.weights.into_iter(),
-//         // }
-//     }
-// }
-
-// struct CombineView<'a, B, L, P, W> 
-// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
-// {
-//     sample1: &'a SortedSampleDescending<'a, B, L, P, W>,
-//     sample2: &'a SortedSampleDescending<'a, B, L, P, W>,
-// }
-
-// impl <'a, B, L, P, W> CombineView<'a, B, L, P, W>
-// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
-// {
-//     fn new(sample1: &'a SortedSampleDescending<'a, B, L, P, W>, sample2: &'a SortedSampleDescending<'a, B, L, P, W>,) -> Self {
-//         return PairedSortedSampleDescending { sample1: sample1, sample2: sample2 };
-//     }
-// }
-
-// struct CombineViewIterator<'a, B, L, P, W>
-// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
-// {
-//     view: &'a CombineView<'a, B, L, P, W>,
-//     iterator1: impl Iterator<Item: ((B, f64), f64),
-//     iterator2: impl Iterator<Item: ((B, f64), f64),
-//     current_index: usize,
-//     num_elements: usize
-// }
-
-// impl <'a, B, L, P, W> CombineViewIterator<'a, B, L, P, W>
-// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
-// {
-//     fn new(view: &'a CombineView<'a, B, L, P, W>) -> Self {
-//         return CombineViewIerator {
-//             view: view,
-//             iterator1: view.sample1.iterator(),
-//             iterator2: view.sample2.iterator(),
-//             current_index: 0,
-//             num_elements: usize
-//         };
-//     }
-// }
-
-
-// impl <'a, B, L, P, W> Iterator for CombineViewIterator<'a, B, L, P, W>
-// where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64>
-// {
-//     type Item = (B, f64, f64);
-//     fn next(&mut self) -> Option<(B, f64, f64)> {
-//         if self.current_index == self.num_elements {
-//             return None;
-//         }
-        
-//         return Some(self.value);
-//     }
-// }
 
 fn select<T, I>(slice: &I, indices: &[usize]) -> Vec<T>
 where T: Copy, I: Data<T>
@@ -412,6 +318,60 @@ pub fn average_precision_on_descending_iterators<B: BinaryLabel>(labels_and_weig
     } else {
         ap / tps
     };
+}
+
+pub fn average_precision_on_two_sorted_samples<'a, B, L, P, W>(
+    sample1: SortedSampleDescending<'a, B, L, P, W>,
+    sample2: SortedSampleDescending<'a, B, L, P, W>
+) -> f64
+where B: BinaryLabel + Clone + PartialOrd + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: IntoIterator<Item = &'a f64>, &'a W: IntoIterator<Item = &'a f64>
+{
+    let iter1 = sample1.predictions.into_iter().cloned().zip(
+        sample1.labels.into_iter().cloned().zip(sample1.weights.into_iter().cloned())
+    );
+    let iter2 = sample2.predictions.into_iter().cloned().zip(
+        sample2.labels.into_iter().cloned().zip(sample2.weights.into_iter().cloned())
+    );
+    return average_precision_on_two_sorted_descending_iterators(iter1, iter2,);
+}
+
+struct SampleItem<B: BinaryLabel> {
+    label: B,
+    prediction: f64,
+    weight: f64
+}
+
+impl <B: BinaryLabel> SampleItem<B>{
+    fn new(label: B, prediction: f64, weight: f64) -> Self {
+        return SampleItem { label, prediction, weight };
+    } 
+}
+
+impl <B: BinaryLabel> PartialEq for SampleItem<B> {
+    fn eq(&self, other: &Self) -> bool {
+        return self.prediction.eq(&other.prediction);
+    }
+}
+
+impl <B: BinaryLabel> PartialOrd for SampleItem<B> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        return self.prediction.partial_cmp(&other.prediction);
+    }
+}
+
+
+pub fn average_precision_on_two_sorted_descending_iterators<B>(
+    iter1: impl Iterator<Item = (f64, (B, f64))>,
+    iter2: impl Iterator<Item = (f64, (B, f64))>,
+) -> f64
+where B: BinaryLabel + Clone + PartialOrd
+{
+    let combined_iter = combine::combine::CombineIterDescending::new(
+        iter1.map(|(p, (l, w))| SampleItem::new(l, p, w)),
+        iter2.map(|(p, (l, w))| SampleItem::new(l, p, w)),
+    );
+    let label_weight_iter = combined_iter.map(|sw| (sw.label, sw.weight));
+    return average_precision_on_descending_iterators(label_weight_iter);
 }
 
 
@@ -795,6 +755,47 @@ pub fn average_precision_py<'py>(
     return PyAveragePrecision::new().score_py(py, labels, predictions, weights, order);
 }
 
+
+#[pyfunction(name = "average_precision_on_two_sorted_samples")]
+#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
+pub fn average_precision_on_two_sorted_samples_py<'py>(
+    py: Python<'py>,
+    labels1: &Bound<'py, PyUntypedArray>,
+    predictions1: PyReadonlyArray1<'py, f64>,
+    weights1: Option<PyReadonlyArray1<'py, f64>>,
+    labels2: &Bound<'py, PyUntypedArray>,
+    predictions2: PyReadonlyArray1<'py, f64>,
+    weights2: Option<PyReadonlyArray1<'py, f64>>,
+) -> PyResult<f64> {
+    let dtype1 = labels1.dtype();
+    let dtype2 = labels2.dtype();
+    if dtype1.is_equiv_to(&dtype::<u8>(py)) && dtype2.is_equiv_to(&dtype::<u8>(py)) {
+        let labels1_dc = labels1.downcast::<PyArray1<u8>>().unwrap().readonly();
+        let labels2_dc = labels2.downcast::<PyArray1<u8>>().unwrap().readonly();
+        let labels1_arr = labels1_dc.as_array();
+        let labels2_arr = labels2_dc.as_array();
+        let predictions1_arr = predictions1.as_array();
+        let predictions2_arr = predictions2.as_array();
+        return match (weights1, weights2) {
+            (Some(w1), Some(w2)) => {
+                let w1_arr = w1.as_array();
+                let w2_arr = w2.as_array();
+                let score = py.allow_threads(move || {
+                    average_precision_on_two_sorted_samples(
+                        SortedSampleDescending::new(&labels1_arr, &predictions1_arr, &w1_arr),
+                        SortedSampleDescending::new(&labels2_arr, &predictions2_arr, &w2_arr),
+                    )
+                });
+                Ok(score)
+            }
+            (Some(w1), None) => Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now.")),
+            (None, Some(w2)) => Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now.")),
+            (None, None) => Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now.")),
+        };
+    }
+    return Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now."));
+}
+
 #[pyfunction(name = "roc_auc")]
 #[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
 pub fn roc_auc_py<'py>(
@@ -894,6 +895,7 @@ pub fn loo_cossim_many_py_f32<'py>(
 #[pymodule(name = "_scors")]
 fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(average_precision_py, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(roc_auc_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f64, m)?).unwrap();
