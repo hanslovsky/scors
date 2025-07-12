@@ -6,7 +6,7 @@ from numpy.typing import DTypeLike
 
 from sklearn.metrics import average_precision_score as ap_skl
 
-from scors import average_precision, average_precision_on_two_sorted_samples
+from scors import Order, average_precision, average_precision_on_two_sorted_samples
 
 def test_sklearn_dosctring():
     # This example is taken from sklearn dosctring
@@ -29,7 +29,19 @@ def test_average_precision_on_two_sorted():
     t0 = time.perf_counter()
     expected = ap_skl(y_true=y_true, y_score=y_scores, sample_weight=weights)
     dt_skl = time.perf_counter() - t0
+    print()
     print(f"{dt_skl=}")
+
+    indices = np.argsort(y_scores)[::-1]
+    y_scores_sorted = y_scores[indices]
+    y_true_sorted = y_true[indices]
+    weights_sorted = weights[indices]
+
+    t0 = time.perf_counter()
+    double_check_sorted = average_precision(y_true_sorted, y_scores_sorted, weights=weights_sorted, order=Order.DESCENDING)
+    dt_desc = time.perf_counter() - t0
+    assert np.isclose(double_check_sorted, expected)
+    print(f"{dt_desc=} (lower bound to that does not consider time required for merging the two arrays)")
 
     y_scores1, y_scores2 = y_scores[:n1], y_scores[n1:]
     indices1 = np.argsort(y_scores1)[::-1]
