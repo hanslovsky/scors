@@ -1,5 +1,6 @@
 import time
 
+import numba
 import numpy as np
 import pytest
 from numpy.typing import DTypeLike
@@ -18,10 +19,44 @@ def test_sklearn_dosctring():
     assert np.isclose
 
 
+@numba.njit
+def merge_by_scores_descending(
+        scores1: np.ndarray,
+        scores2: np.ndarray,
+        true1: np.ndarray,
+        true2: np.ndarray,
+        weights1: np.ndarray,
+        weights2: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    n1 = scores1.shape[0]
+    n2 = scores2.shape[0]
+    n = n1 + n2
+    scores = np.empty((n,), dtype=scores1.dtype)
+    true = np.empty((n,), dtype=true1.dtype)
+    weights = np.empty((n,), dtype=weights1.dtype)
+    i,k = 0, 0
+    # print(scores1, scores2)
+    for m in range(n):
+        if i == n1:
+            s, t, w, idx = scores2, true2, weights2, k
+            k += 1
+        elif k == n2 or scores1[i] >= scores2[k]:
+            s, t, w, idx = scores1, true1, weights1, i
+            i += 1
+        else:
+            s, t, w, idx = scores2, true2, weights2, k
+            k += 1
+        # print(m, i, k)
+        scores[m] = s[idx]
+        true[m] = t[idx]
+        weights[m] = w[idx]
+    return scores, true, weights
+
+
 def test_average_precision_on_two_sorted():
     rng = np.random.default_rng(42)
-    n = 1_000_001
-    n1 = 900_002
+    n = 100_000_001
+    n1 =  90_000_002
     n2 = n - n1
     y_true = np.require(rng.random(n) > 0.5, dtype=np.uint8)
     y_scores = rng.random(n)
@@ -61,6 +96,31 @@ def test_average_precision_on_two_sorted():
     assert np.isclose(double_check, expected)
     print(f"{dt_reg=}")
 
+    # trigger jit
+    y_scores_merged, y_true_merged, weights_merged = merge_by_scores_descending(
+        y_scores1,
+        y_scores2,
+        y_true1,
+        y_true2,
+        weights1,
+        weights2
+    )
+    t0 = time.perf_counter()
+    y_scores_merged, y_true_merged, weights_merged = merge_by_scores_descending(
+        y_scores1,
+        y_scores2,
+        y_true1,
+        y_true2,
+        weights1,
+        weights2
+    )
+    dt_merge = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    check_merged = average_precision(y_true_merged, y_scores_merged, weights=weights_merged, order=Order.DESCENDING)
+    dt_merged = time.perf_counter() - t0
+    assert np.isclose(check_merged, expected)
+    print(f"dt_sum={dt_merge+dt_merged} {dt_merge=} {dt_merged=}")
+
     t0 = time.perf_counter()
     actual = average_precision_on_two_sorted_samples(
         labels1=y_true1,
@@ -72,5 +132,5 @@ def test_average_precision_on_two_sorted():
     )
     dt_act = time.perf_counter() - t0
     assert np.isclose(actual, expected)
-    print(f"{dt_act}")
+    print(f"{dt_act=}")
 
