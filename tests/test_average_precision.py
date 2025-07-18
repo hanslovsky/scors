@@ -7,7 +7,7 @@ from numpy.typing import DTypeLike
 
 from sklearn.metrics import average_precision_score as ap_skl
 
-from scors import Order, average_precision, average_precision_on_two_sorted_samples
+from scors import Order, average_precision, average_precision_on_two_sorted_samples #_deprecated as average_precision_on_two_sorted_samples
 
 def test_sklearn_dosctring():
     # This example is taken from sklearn dosctring
@@ -33,9 +33,8 @@ def merge_by_scores_descending(
     n = n1 + n2
     scores = np.empty((n,), dtype=scores1.dtype)
     true = np.empty((n,), dtype=true1.dtype)
-    weights = np.empty((n,), dtype=weights1.dtype)
+    weights = np.ones_like(scores)  # np.empty((n,), dtype=weights1.dtype)
     i,k = 0, 0
-    # print(scores1, scores2)
     for m in range(n):
         if i == n1:
             s, t, w, idx = scores2, true2, weights2, k
@@ -46,7 +45,6 @@ def merge_by_scores_descending(
         else:
             s, t, w, idx = scores2, true2, weights2, k
             k += 1
-        # print(m, i, k)
         scores[m] = s[idx]
         true[m] = t[idx]
         weights[m] = w[idx]
@@ -55,14 +53,19 @@ def merge_by_scores_descending(
 
 def test_average_precision_on_two_sorted():
     rng = np.random.default_rng(42)
-    n = 100_000_001
-    n1 =  90_000_002
+    n = 10_000_001
+    n1 =  9_000_002
     n2 = n - n1
-    y_true = np.require(rng.random(n) > 0.5, dtype=np.uint8)
+    y_true = np.require(rng.random(n) > 0.5, dtype=bool)
     y_scores = rng.random(n)
     weights = rng.random(n)
+
+    def split(array: np.ndarray, where=n1) -> tuple[np.ndarray, np.ndarray]:
+        return array[:where], array[where:]
+    
     t0 = time.perf_counter()
-    expected = ap_skl(y_true=y_true, y_score=y_scores, sample_weight=weights)
+    # concatenation should be measured as part of the runtime
+    expected = ap_skl(y_true=np.concatenate(split(y_true)), y_score=np.concatenate(split(y_scores)), sample_weight=np.concatenate(split(weights)))
     dt_skl = time.perf_counter() - t0
     print()
     print(f"{dt_skl=}")
@@ -121,6 +124,8 @@ def test_average_precision_on_two_sorted():
     assert np.isclose(check_merged, expected)
     print(f"dt_sum={dt_merge+dt_merged} {dt_merge=} {dt_merged=}")
 
+    import logging
+    logging.basicConfig(level="INFO")
     t0 = time.perf_counter()
     actual = average_precision_on_two_sorted_samples(
         labels1=y_true1,
