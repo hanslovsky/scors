@@ -7,7 +7,7 @@ use pyo3::Bound;
 use pyo3::exceptions::PyTypeError;
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
-    use std::cmp::PartialOrd;
+use std::cmp::PartialOrd;
 use std::iter::{DoubleEndedIterator,repeat};
 use std::marker::PhantomData;
 use std::ops::AddAssign;
@@ -744,34 +744,6 @@ pub fn average_precision_py<'py>(
     order: Option<PyOrder>
 ) -> PyResult<f64> {
     return PyAveragePrecision::new().score_py(py, labels, predictions, weights, order);
-}
-
-pub trait MyFloat {
-    fn to_f64(&self) -> f64;
-}
-
-impl MyFloat for f64 {
-    fn to_f64(&self) -> f64 {
-        return *self;
-    }
-}
-
-impl MyFloat for &f64 {
-    fn to_f64(&self) -> f64 {
-        return **self;
-    }
-}
-
-impl MyFloat for f32 {
-    fn to_f64(&self) -> f64 {
-        return *self as f64;
-    }
-}
-
-impl MyFloat for &f32 {
-    fn to_f64(&self) -> f64 {
-        return **self as f64;
-    }
 }
 
 
