@@ -229,14 +229,14 @@ where T: Copy, I: Data<T>
     return selection;
 }
 
-pub fn average_precision<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
-where B: BinaryLabel, L: Data<B>, P: SortableData<f64>, W: Data<f64>
+pub fn average_precision<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
+where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F>, W: Data<F>
 {
     return average_precision_with_order(labels, predictions, weights, None);
 }
 
-pub fn average_precision_with_order<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
-where B: BinaryLabel, L: Data<B>, P: SortableData<f64>, W: Data<f64>
+pub fn average_precision_with_order<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
+where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F>, W: Data<F>
 {
     return match order {
         Some(o) => average_precision_on_sorted_labels(labels, weights, o),
@@ -255,8 +255,8 @@ where B: BinaryLabel, L: Data<B>, P: SortableData<f64>, W: Data<f64>
     };
 }
 
-pub fn average_precision_on_sorted_labels<B, L, W>(labels: &L, weights: Option<&W>, order: Order) -> f64
-where B: BinaryLabel, L: Data<B>, W: Data<f64>
+pub fn average_precision_on_sorted_labels<B, L, F, W>(labels: &L, weights: Option<&W>, order: Order) -> f64
+where B: BinaryLabel, L: Data<B>, F: num::Float, W: Data<F>
 {
     return match weights {
         None => average_precision_on_iterator(labels.get_iterator(), ConstWeight::one(), order),
@@ -264,8 +264,8 @@ where B: BinaryLabel, L: Data<B>, W: Data<f64>
     };
 }
 
-pub fn average_precision_on_iterator<B, L, W>(labels: L, weights: W, order: Order) -> f64
-where B: BinaryLabel, L: DoubleEndedIterator<Item = B>, W: DoubleEndedIterator<Item = f64>
+pub fn average_precision_on_iterator<B, L, F, W>(labels: L, weights: W, order: Order) -> f64
+where B: BinaryLabel, L: DoubleEndedIterator<Item = B>, F: num::Float, W: DoubleEndedIterator<Item = F>
 {
     return match order {
         Order::ASCENDING => average_precision_on_descending_iterator(labels.rev(), weights.rev()),
@@ -273,15 +273,12 @@ where B: BinaryLabel, L: DoubleEndedIterator<Item = B>, W: DoubleEndedIterator<I
     };
 }
 
-pub fn average_precision_on_descending_iterator<B: BinaryLabel>(labels: impl Iterator<Item = B>, weights: impl Iterator<Item = f64>) -> f64 {
+pub fn average_precision_on_descending_iterator<B: BinaryLabel, F: num::Float>(labels: impl Iterator<Item = B>, weights: impl Iterator<Item = F>) -> f64 {
     return average_precision_on_descending_iterators(labels.zip(weights));
 }
 
-// impl <'a, B, L, P, W> SortedSampleDescending<'a, B, L, P, W>
-// where B: BinaryLabel, L: IntoIterator<Item = B>, P: IntoIterator<Item = f64>, W: IntoIterator<Item = f64>
-
-pub fn average_precision_on_sorted_samples<'a, B, L, P, W>(l1: &'a L, p1: &'a P, w1: &'a W, l2: &'a L, p2: &'a P, w2: &'a W) -> f64
-where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: IntoIterator<Item = &'a f64>, &'a W: IntoIterator<Item = &'a f64>
+pub fn average_precision_on_sorted_samples<'a, B, L, F, P, W>(l1: &'a L, p1: &'a P, w1: &'a W, l2: &'a L, p2: &'a P, w2: &'a W) -> f64
+where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, F: num::Float + Clone + 'a, &'a P: IntoIterator<Item = &'a F>, &'a W: IntoIterator<Item = &'a F>
 {
     // let mut it1 = p1.into_iter();
     let i1 = p1.into_iter().cloned().zip(l1.into_iter().cloned().zip(w1.into_iter().cloned()));
@@ -296,17 +293,19 @@ where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: Int
     return average_precision_on_descending_iterators(labels_and_weights);
 }
 
-pub fn average_precision_on_descending_iterators<B: BinaryLabel>(labels_and_weights: impl Iterator<Item = (B, f64)>) -> f64 {
+pub fn average_precision_on_descending_iterators<B: BinaryLabel, F: num::Float>(
+    labels_and_weights: impl Iterator<Item = (B, F)>
+) -> f64 {
     let mut ap: f64 = 0.0;
     let mut tps: f64 = 0.0;
     let mut fps: f64 = 0.0;
     for (label, weight) in labels_and_weights {
-        let w: f64 = weight;
+        let w: f64 = weight.to_f64().unwrap();
         let l: bool = label.get_value();
         // println!("{} {}", w, l);
         let tp = w * f64::from(l);
         tps += tp;
-        fps += weight - tp;
+        fps += w - tp;
         let ps = tps + fps;
         let precision = tps / ps;
         ap += tp * precision;
@@ -354,11 +353,11 @@ where B: BinaryLabel + Clone + PartialOrd
 }
 
 
-pub fn average_precision_on_two_sorted_descending_iterators<B>(
-    iter1: impl Iterator<Item = (f64, (B, f64))>,
-    iter2: impl Iterator<Item = (f64, (B, f64))>,
+pub fn average_precision_on_two_sorted_descending_iterators<B, F>(
+    iter1: impl Iterator<Item = (F, (B, F))>,
+    iter2: impl Iterator<Item = (F, (B, F))>,
 ) -> f64
-where B: BinaryLabel + Clone + PartialOrd
+where B: BinaryLabel + Clone + PartialOrd, F: num::Float
 {
     let combined_iter = combine::combine::CombineIterDescending::new(iter1, iter2);
     let label_weight_iter = combined_iter.map(|(a, b)| b);
@@ -732,6 +731,28 @@ impl PyScore for PyRocAuc {
         return roc_auc_with_order(labels, predictions, weights, order, self.max_fpr);
     }
 }
+
+// pub fn average_precision_py_generic<'py, B, F>(
+//     py: Python<'py>,
+//     labels: PyReadonlyArray1<'py, B>,
+//     predictions: PyReadonlyArray1<'py, F>,
+//     weights: Option<PyReadonlyArray1<'py, F>>,
+//     order: Option<PyOrder>
+// ) -> f64
+// where B: BinaryLabel + Clone + PartialOrd + Element, F: num::Float + Element
+// {
+//     let l = labels.as_array();
+//     let p = predicitons.as_array();
+//     return match weights {
+//         Some(w) => {
+//             let ww = w.as_array();
+//             py.allow_threads(move || {
+//                 average_precision_with_order(l, p, ww, order)
+//             })
+//         }
+//         None => py.allow_threads(move || average_precision_with_order(l, p, repeate(F::one), order));
+//     }
+// }
 
 
 #[pyfunction(name = "average_precision")]
