@@ -2,6 +2,7 @@ mod combine;
 
 use ndarray::{Array1,ArrayView1,ArrayView,ArrayView2,ArrayView3,ArrayViewMut1,Ix1};
 use num;
+use num::traits::float::TotalOrder;
 use numpy::{Element,PyArray,PyArray1,PyArray2,PyArray3,PyArrayDescr,PyArrayDescrMethods,PyArrayDyn,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
 use pyo3::Bound;
 use pyo3::exceptions::PyTypeError;
@@ -130,7 +131,9 @@ impl <T: Clone> Data<T> for ArrayView<'_, T, Ix1> {
     }
 }
 
-impl SortableData<f64> for ArrayView<'_, f64, Ix1> {
+impl <F> SortableData<F> for ArrayView<'_, F, Ix1>
+where F: num::Float + TotalOrder
+{
     fn argsort_unstable(&self) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
         indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
@@ -695,6 +698,94 @@ trait PyScore: Ungil + Sync {
             return Ok(score)
         }
         return Err(PyTypeError::new_err(format!("Unsupported dtype for labels: {}. Supported dtypes are bool, uint8, uint16, uint32, uint64, in8, int16, int32, int64", label_dtype)));
+    }
+}
+
+trait PyScoreGeneric<B, F>: Ungil + Sync
+where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
+{
+
+    fn score_py<'py>(
+        &self,
+        py: Python<'py>,
+        labels: PyReadonlyArray1<'py, B>,
+        predictions: PyReadonlyArray1<'py, F>,
+        weights: Option<PyReadonlyArray1<'py, F>>,
+        order: Option<PyOrder>,
+    ) -> f64
+    {
+        let labels = labels.as_array();
+        let predictions = predictions.as_array();
+        let order = order.map(py_order_as_order);
+        let score = match weights {
+            Some(weight) => {
+                let w = weight.as_array();
+                py.allow_threads(move || {
+                    self.score(labels, predictions, Some(&w), order)
+                })
+            },
+            None => py.allow_threads(move || {
+                self.score(labels, predictions, None::<&Vec<F>>, order)
+            })
+        };
+        return score;
+    }
+
+    fn score<L: Data<B>, P: SortableData<F> + Data<F>, W: Data<F>>(
+        &self,
+        labels: L,
+        predictions: P,
+        weights: Option<&W>,
+        order: Option<Order>
+    ) -> f64;
+
+}
+
+struct AveragePrecisionPyGeneric {
+
+}
+
+impl AveragePrecisionPyGeneric {
+    fn new() -> Self {
+        return AveragePrecisionPyGeneric {};
+    }
+}
+
+impl <B, F> PyScoreGeneric<B, F> for AveragePrecisionPyGeneric
+where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
+{
+    fn score<L: Data<B>, P: SortableData<F> + Data<F>, W: Data<F>>(
+        &self,
+        labels: L,
+        predictions: P,
+        weights: Option<&W>,
+        order: Option<Order>
+    ) -> f64 {
+        return average_precision_with_order(&labels, &predictions, weights, order);
+    }
+}
+
+struct RocAucPyGeneric {
+    max_fpr: Option<f64>,
+}
+
+impl RocAucPyGeneric {
+    fn new(max_fpr: Option<f64>) -> Self {
+        return RocAucPyGeneric { max_fpr: max_fpr };
+    }
+}
+
+impl <B> PyScoreGeneric<B, f64> for RocAucPyGeneric
+where B: BinaryLabel + Element
+{
+    fn score<L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>>(
+        &self,
+        labels: L,
+        predictions: P,
+        weights: Option<&W>,
+        order: Option<Order>
+    ) -> f64 {
+        return roc_auc_with_order(&labels, &predictions, weights, order, self.max_fpr);
     }
 }
 
