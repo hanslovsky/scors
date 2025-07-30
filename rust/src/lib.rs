@@ -19,16 +19,16 @@ pub enum Order {
     DESCENDING
 }
 
-struct ConstWeight {
-    value: f64
+struct ConstWeight<F: num::Float> {
+    value: F
 }
 
-impl ConstWeight {
-    fn new(value: f64) -> Self {
+impl <F: num::Float> ConstWeight<F> {
+    fn new(value: F) -> Self {
         return ConstWeight { value: value };
     }
     fn one() -> Self {
-        return Self::new(1.0);
+        return Self::new(F::one());
     }
 }
 
@@ -43,25 +43,25 @@ pub trait SortableData<T> {
     fn argsort_unstable(&self) -> Vec<usize>;
 }
 
-impl Iterator for ConstWeight {
-    type Item = f64;
-    fn next(&mut self) -> Option<f64> {
+impl <F: num::Float> Iterator for ConstWeight<F> {
+    type Item = F;
+    fn next(&mut self) -> Option<F> {
         return Some(self.value);
     }
 }
 
-impl DoubleEndedIterator for ConstWeight {
-    fn next_back(&mut self) -> Option<f64> {
+impl <F: num::Float> DoubleEndedIterator for ConstWeight<F> {
+    fn next_back(&mut self) -> Option<F> {
         return Some(self.value);
     }
 }
 
-impl Data<f64> for ConstWeight {
-    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = f64> {
+impl <F: num::Float> Data<F> for ConstWeight<F> {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = F> {
         return ConstWeight::new(self.value);
     }
 
-    fn get_at(&self, _index: usize) -> f64 {
+    fn get_at(&self, _index: usize) -> F {
         return self.value.clone();
     }
 }
@@ -262,7 +262,7 @@ pub fn average_precision_on_sorted_labels<B, L, F, W>(labels: &L, weights: Optio
 where B: BinaryLabel, L: Data<B>, F: num::Float, W: Data<F>
 {
     return match weights {
-        None => average_precision_on_iterator(labels.get_iterator(), ConstWeight::one(), order),
+        None => average_precision_on_iterator(labels.get_iterator(), ConstWeight::<F>::one(), order),
         Some(w) => average_precision_on_iterator(labels.get_iterator(), w.get_iterator(), order)
     };
 }
@@ -370,20 +370,20 @@ where B: BinaryLabel + Clone + PartialOrd, F: num::Float
 
 
 // ROC AUC score
-pub fn roc_auc<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
-where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+pub fn roc_auc<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
+where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W: Data<F>
 {
     return roc_auc_with_order(labels, predictions, weights, None, None);
 }
 
-pub fn roc_auc_max_fpr<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, max_false_positive_rate: Option<f64>) -> f64
-where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+pub fn roc_auc_max_fpr<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, max_false_positive_rate: Option<f64>) -> f64
+where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W: Data<F>
 {
     return roc_auc_with_order(labels, predictions, weights, None, max_false_positive_rate);
 }
 
-pub fn roc_auc_with_order<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
-where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>
+pub fn roc_auc_with_order<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
+where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W: Data<F>
 {
     return match order {
         Some(o) => roc_auc_on_sorted_labels(labels, predictions, weights, o, max_false_positive_rate),
@@ -404,16 +404,20 @@ where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>
         }
     };
 }
-pub fn roc_auc_on_sorted_labels<B, L, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Order, max_false_positive_rate: Option<f64>) -> f64
-where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64> {
+pub fn roc_auc_on_sorted_labels<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Order, max_false_positive_rate: Option<f64>) -> f64
+where B: BinaryLabel, L: Data<B>, F: num::Float, P: Data<F>, W: Data<F> {
     return match max_false_positive_rate {
-        None => match weights {
-            Some(w) => roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut w.get_iterator(), order),
-            None => roc_auc_on_sorted_iterator(&mut labels.get_iterator(), &mut predictions.get_iterator(), &mut ConstWeight::one().get_iterator(), order),
+        None => {
+            let mut lit = labels.get_iterator();
+            let mut pit = predictions.get_iterator().map(|p| p.to_f64().unwrap());
+            match weights {
+                Some(w) => roc_auc_on_sorted_iterator(&mut lit, &mut pit, &mut w.get_iterator().map(|x| x.to_f64().unwrap()), order),
+                None => roc_auc_on_sorted_iterator(&mut lit, &mut pit, &mut ConstWeight::<F>::one().get_iterator().map(|x| x.to_f64().unwrap()), order),
+            }
         }
         Some(max_fpr) => match weights {
             Some(w) => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, w, order, max_fpr),
-            None => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, &ConstWeight::one(), order, max_fpr),
+            None => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, &ConstWeight::<F>::one(), order, max_fpr),
         }
     };
 }
@@ -481,13 +485,13 @@ fn get_positive_sum<B: BinaryLabel>(
     return (false_positives, true_positives);
 }
 
-pub fn roc_auc_on_sorted_with_fp_cutoff<B, L, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: f64) -> f64
-where B: BinaryLabel, L: Data<B>, P: Data<f64>, W: Data<f64> {
+pub fn roc_auc_on_sorted_with_fp_cutoff<B, L, F, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: f64) -> f64
+where B: BinaryLabel, L: Data<B>, F: num::Float, P: Data<F>, W: Data<F> {
     // TODO validate max_fpr
-    let (fps, tps) = get_positive_sum(labels.get_iterator(), weights.get_iterator());
+    let (fps, tps) = get_positive_sum(labels.get_iterator(), weights.get_iterator().map(|x| x.to_f64().unwrap()));
     let mut l_it = labels.get_iterator();
-    let mut p_it = predictions.get_iterator();
-    let mut w_it = weights.get_iterator();
+    let mut p_it = predictions.get_iterator().map(|p| p.to_f64().unwrap());
+    let mut w_it = weights.get_iterator().map(|w| w.to_f64().unwrap());
     return match order {
         Order::ASCENDING => roc_auc_on_descending_iterator_with_fp_cutoff(&mut l_it.rev(), &mut p_it.rev(), &mut w_it.rev(), fps, tps, max_false_positive_rate),
         Order::DESCENDING => roc_auc_on_descending_iterator_with_fp_cutoff(&mut l_it, &mut p_it, &mut w_it, fps, tps, max_false_positive_rate)
@@ -606,101 +610,6 @@ fn py_order_as_order(order: PyOrder) -> Order {
     }
 }
 
-
-trait PyScore: Ungil + Sync {
-
-    fn score<B, L, P, W>(&self, labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
-    where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>;
-
-    fn score_py_generic<'py, B>(
-        &self,
-        py: Python<'py>,
-        labels: &PyReadonlyArray1<'py, B>,
-        predictions: &PyReadonlyArray1<'py, f64>,
-        weights: &Option<PyReadonlyArray1<'py, f64>>,
-        order: &Option<PyOrder>,
-    ) -> f64
-    where B: BinaryLabel + Element
-    {
-        let labels = labels.as_array();
-        let predictions = predictions.as_array();
-        let order = order.map(py_order_as_order);
-        let score = match weights {
-            Some(weight) => {
-                let weights = weight.as_array();
-                py.allow_threads(move || {
-                    self.score(&labels, &predictions, Some(&weights), order)
-                })
-            },
-            None => py.allow_threads(move || {
-                self.score(&labels, &predictions, None::<&Vec<f64>>, order)
-            })
-        };
-        return score;
-    }
-
-    fn score_py_match_run<'py, T>(
-        &self,
-        py: Python<'py>,
-        labels: &Bound<'py, PyUntypedArray>,
-        predictions: &PyReadonlyArray1<'py, f64>,
-        weights: &Option<PyReadonlyArray1<'py, f64>>,
-        order: &Option<PyOrder>,
-        dt: &Bound<'py, PyArrayDescr>
-    ) -> Option<f64>
-    where T: Element + BinaryLabel
-    {
-        return if dt.is_equiv_to(&dtype::<T>(py)) {
-            let labels = labels.downcast::<PyArray1<T>>().unwrap().readonly();
-            Some(self.score_py_generic(py, &labels.readonly(), predictions, weights, order))
-        } else {
-            None
-        };
-    }
-    
-    fn score_py<'py>(
-        &self,
-        py: Python<'py>,
-        labels: &Bound<'py, PyUntypedArray>,
-        predictions: PyReadonlyArray1<'py, f64>,
-        weights: Option<PyReadonlyArray1<'py, f64>>,
-        order: Option<PyOrder>,
-    ) -> PyResult<f64> {
-        if labels.ndim() != 1 {
-            return Err(PyTypeError::new_err(format!("Expected 1-dimensional array for labels but found {} dimenisons.", labels.ndim())));
-        }
-        let label_dtype = labels.dtype();
-        if let Some(score) = self.score_py_match_run::<bool>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        else if let Some(score) = self.score_py_match_run::<u8>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        else if let Some(score) = self.score_py_match_run::<i8>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        else if let Some(score) = self.score_py_match_run::<u16>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        else if let Some(score) = self.score_py_match_run::<i16>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        else if let Some(score) = self.score_py_match_run::<u32>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        else if let Some(score) = self.score_py_match_run::<i32>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        else if let Some(score) = self.score_py_match_run::<u64>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        else if let Some(score) = self.score_py_match_run::<i64>(py, &labels, &predictions, &weights, &order, &label_dtype) {
-            return Ok(score)
-        }
-        return Err(PyTypeError::new_err(format!("Unsupported dtype for labels: {}. Supported dtypes are bool, uint8, uint16, uint32, uint64, in8, int16, int32, int64", label_dtype)));
-    }
-}
-
 trait PyScoreGeneric<B, F>: Ungil + Sync
 where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
 {
@@ -775,10 +684,10 @@ impl RocAucPyGeneric {
     }
 }
 
-impl <B> PyScoreGeneric<B, f64> for RocAucPyGeneric
-where B: BinaryLabel + Element
+impl <B, F> PyScoreGeneric<B, F> for RocAucPyGeneric
+where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
 {
-    fn score<L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64>>(
+    fn score<L: Data<B>, P: SortableData<F> + Data<F>, W: Data<F>>(
         &self,
         labels: L,
         predictions: P,
@@ -789,73 +698,238 @@ where B: BinaryLabel + Element
     }
 }
 
-struct PyAveragePrecision {
-    
-}
 
-impl PyAveragePrecision{
-    fn new() -> Self {
-        return PyAveragePrecision {};
-    }
-}
-
-impl PyScore for PyAveragePrecision {
-    fn score<B, L, P, W>(&self, labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
-    where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64> {
-        return average_precision_with_order(labels, predictions, weights, order);
-    }
-}
-
-struct PyRocAuc {
-    max_fpr: Option<f64>
-}
-
-impl PyRocAuc {
-    fn new(max_fpr: Option<f64>) -> Self {
-        return PyRocAuc { max_fpr: max_fpr };
-    }
-}
-
-impl PyScore for PyRocAuc {
-    fn score<B, L, P, W>(&self, labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
-    where B: BinaryLabel, L: Data<B>, P: SortableData<f64> + Data<f64>, W: Data<f64> {
-        return roc_auc_with_order(labels, predictions, weights, order, self.max_fpr);
-    }
-}
-
-// pub fn average_precision_py_generic<'py, B, F>(
-//     py: Python<'py>,
-//     labels: PyReadonlyArray1<'py, B>,
-//     predictions: PyReadonlyArray1<'py, F>,
-//     weights: Option<PyReadonlyArray1<'py, F>>,
-//     order: Option<PyOrder>
-// ) -> f64
-// where B: BinaryLabel + Clone + PartialOrd + Element, F: num::Float + Element
-// {
-//     let l = labels.as_array();
-//     let p = predicitons.as_array();
-//     return match weights {
-//         Some(w) => {
-//             let ww = w.as_array();
-//             py.allow_threads(move || {
-//                 average_precision_with_order(l, p, ww, order)
-//             })
-//         }
-//         None => py.allow_threads(move || average_precision_with_order(l, p, repeate(F::one), order));
-//     }
-// }
-
-
-#[pyfunction(name = "average_precision")]
+#[pyfunction(name = "average_precision_bool_f32")]
 #[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_py<'py>(
+pub fn average_precision_bool_f32<'py>(
     py: Python<'py>,
-    labels: &Bound<'py, PyUntypedArray>,
+    labels: PyReadonlyArray1<'py, bool>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_i8_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_i8_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i8>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_i16_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_i16_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i16>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_i32_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_i32_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i32>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_i64_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_i64_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i64>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_u8_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_u8_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u8>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_u16_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_u16_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u16>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_u32_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_u32_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u32>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_u64_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_u64_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u64>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_bool_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_bool_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, bool>,
     predictions: PyReadonlyArray1<'py, f64>,
     weights: Option<PyReadonlyArray1<'py, f64>>,
     order: Option<PyOrder>
-) -> PyResult<f64> {
-    return PyAveragePrecision::new().score_py(py, labels, predictions, weights, order);
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_i8_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_i8_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i8>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_i16_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_i16_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i16>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_i32_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_i32_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i32>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_i64_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_i64_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i64>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_u8_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_u8_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u8>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_u16_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_u16_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u16>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_u32_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_u32_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u32>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "average_precision_u64_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+pub fn average_precision_u64_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u64>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>
+) -> f64 {
+    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
 }
 
 
@@ -1215,18 +1289,258 @@ pub fn average_precision_on_two_sorted_samples_py<'py>(
     return Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now."));
 }
 
-#[pyfunction(name = "roc_auc")]
+
+#[pyfunction(name = "roc_auc_bool_f32")]
 #[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_py<'py>(
+pub fn roc_auc_bool_f32<'py>(
     py: Python<'py>,
-    labels: &Bound<'py, PyUntypedArray>,
+    labels: PyReadonlyArray1<'py, bool>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_i8_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_i8_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i8>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_i16_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_i16_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i16>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_i32_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_i32_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i32>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_i64_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_i64_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i64>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_u8_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_u8_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u8>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_u16_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_u16_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u16>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_u32_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_u32_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u32>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_u64_f32")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_u64_f32<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u64>,
+    predictions: PyReadonlyArray1<'py, f32>,
+    weights: Option<PyReadonlyArray1<'py, f32>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_bool_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_bool_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, bool>,
     predictions: PyReadonlyArray1<'py, f64>,
     weights: Option<PyReadonlyArray1<'py, f64>>,
     order: Option<PyOrder>,
-    max_fpr: Option<f64>,
-) -> PyResult<f64> {
-    return PyRocAuc::new(max_fpr).score_py(py, labels, predictions, weights, order);
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
 }
+
+
+#[pyfunction(name = "roc_auc_i8_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_i8_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i8>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_i16_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_i16_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i16>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_i32_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_i32_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i32>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_i64_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_i64_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, i64>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_u8_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_u8_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u8>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_u16_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_u16_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u16>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_u32_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_u32_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u32>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
+
+#[pyfunction(name = "roc_auc_u64_f64")]
+#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+pub fn roc_auc_u64_f64<'py>(
+    py: Python<'py>,
+    labels: PyReadonlyArray1<'py, u64>,
+    predictions: PyReadonlyArray1<'py, f64>,
+    weights: Option<PyReadonlyArray1<'py, f64>>,
+    order: Option<PyOrder>,
+    max_fpr: Option<f64>
+) -> f64 {
+    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+}
+
 
 #[pyfunction(name = "loo_cossim")]
 #[pyo3(signature = (data))]
@@ -1313,7 +1627,25 @@ pub fn loo_cossim_many_py_f32<'py>(
 
 #[pymodule(name = "_scors")]
 fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(average_precision_py, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_bool_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_i8_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_i16_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_i32_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_i64_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_u8_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_u16_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_u32_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_u64_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_bool_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_i8_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_i16_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_i32_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_i64_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_u8_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_u16_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_u32_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(average_precision_u64_f64, m)?).unwrap();
+
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_bool_f32, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i8_f32, m)?).unwrap();
@@ -1333,7 +1665,26 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u16_f64, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u32_f64, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u64_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_py, m)?).unwrap();
+
+    m.add_function(wrap_pyfunction!(roc_auc_bool_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_i8_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_i16_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_i32_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_i64_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_u8_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_u16_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_u32_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_u64_f32, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_bool_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_i8_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_i16_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_i32_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_i64_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_u8_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_u16_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_u32_f64, m)?).unwrap();
+    m.add_function(wrap_pyfunction!(roc_auc_u64_f64, m)?).unwrap();
+
     m.add_function(wrap_pyfunction!(loo_cossim_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f64, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f32, m)?).unwrap();
