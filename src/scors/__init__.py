@@ -8,10 +8,7 @@ from . import _scors as scors
 from ._scors import *
 
 __doc__ = scors.__doc__
-
-
 _logger = logging.getLogger("scors")
-
 _supported_label_types = (
     ("bool", "bool",),
     ("int8", "i8",),
@@ -28,6 +25,7 @@ _supported_score_types = (
     ("float64", "f64"),
 )
 
+
 def _lookup_supported_type(dtype: str | np.dtype, supported_type_dict: dict[str, str]) -> str:
     dtype_name = dtype if isinstance(dtype, str) else dtype.name
     try:
@@ -42,6 +40,7 @@ def _lookup_supported_label_type(dtype: str | np.dtype) -> str:
 
 def _lookup_supported_score_type(dtype: str | np.dtype) -> str:
     return _lookup_supported_type(dtype, dict(_supported_score_types))
+
 
 def _lookup_supported_score_func(
         func_name: str,
@@ -58,7 +57,6 @@ def _from_generic_score(scors_name: str) -> Callable[[np.ndarray, np.ndarray, np
             raise ValueError(f"Weights must be the same dtype as predictions, if provided, but found {weights.dtype=} != {predictions.dtype=}")
         return _lookup_supported_score_func(scors_name, labels.dtype, predictions.dtype)(labels, predictions, *args, weights=weights, order=order, **kwargs)
     return scors_func
-        
 
     
 def _loo_cossim_many(data: np.ndarray):
@@ -118,10 +116,10 @@ def average_precision_on_two_sorted_samples(
     return func(l1, p1, w1, l2, p2, w2)
     
 
-
 __all__ = sorted([
     "average_precision",
     "average_precision_on_two_sorted_samples",
     "loo_cossim_many",
+    "roc_auc_score",
     *scors.__all__
 ])
