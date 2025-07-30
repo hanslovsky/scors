@@ -120,6 +120,6 @@ __all__ = sorted([
     "average_precision",
     "average_precision_on_two_sorted_samples",
     "loo_cossim_many",
-    "roc_auc_score",
+    "roc_auc",
     *scors.__all__
 ])
