@@ -698,238 +698,29 @@ where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
     }
 }
 
-
-#[pyfunction(name = "average_precision_bool_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_bool_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, bool>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_i8_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_i8_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i8>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_i16_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_i16_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i16>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_i32_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_i32_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i32>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_i64_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_i64_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i64>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_u8_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_u8_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u8>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_u16_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_u16_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u16>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_u32_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_u32_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u32>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_u64_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_u64_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u64>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_bool_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_bool_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, bool>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_i8_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_i8_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i8>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_i16_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_i16_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i16>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_i32_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_i32_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i32>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_i64_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_i64_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i64>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_u8_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_u8_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u8>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_u16_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_u16_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u16>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_u32_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_u32_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u32>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "average_precision_u64_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
-pub fn average_precision_u64_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u64>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>
-) -> f64 {
-    return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+// https://stackoverflow.com/questions/70128978/how-to-define-different-function-names-with-a-macro
+// https://stackoverflow.com/questions/70872059/using-a-rust-macro-to-generate-a-function-with-variable-parameters
+// https://doc.rust-lang.org/rust-by-example/macros/designators.html
+// https://users.rust-lang.org/t/is-there-a-way-to-convert-given-identifier-to-a-string-in-a-macro/42907
+macro_rules! average_precision_py {
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
+        #[pyfunction(name = $pyname)]
+        #[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
+        pub fn $fname<'py>(
+            py: Python<'py>,
+            labels: PyReadonlyArray1<'py, $label_type>,
+            predictions: PyReadonlyArray1<'py, $prediction_type>,
+            weights: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            order: Option<PyOrder>
+        ) -> f64
+        {
+            return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+        }
+    };
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
+        average_precision_py!($fname, $pyname, $label_type, $prediction_type);
+        $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
+    };
 }
 
 
@@ -1627,24 +1418,24 @@ pub fn loo_cossim_many_py_f32<'py>(
 
 #[pymodule(name = "_scors")]
 fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(average_precision_bool_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_i8_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_i16_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_i32_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_i64_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_u8_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_u16_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_u32_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_u64_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_bool_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_i8_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_i16_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_i32_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_i64_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_u8_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_u16_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_u32_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_u64_f64, m)?).unwrap();
+    average_precision_py!(average_precision_bool_f32, "average_precision_bool_f32", bool, f32, m);
+    average_precision_py!(average_precision_i8_f32, "average_precision_i8_f32", i8, f32, m);
+    average_precision_py!(average_precision_i16_f32, "average_precision_i16_f32", i16, f32, m);
+    average_precision_py!(average_precision_i32_f32, "average_precision_i32_f32", i32, f32, m);
+    average_precision_py!(average_precision_i64_f32, "average_precision_i64_f32", i64, f32, m);
+    average_precision_py!(average_precision_u8_f32, "average_precision_u8_f32", u8, f32, m);
+    average_precision_py!(average_precision_u16_f32, "average_precision_u16_f32", u16, f32, m);
+    average_precision_py!(average_precision_u32_f32, "average_precision_u32_f32", u32, f32, m);
+    average_precision_py!(average_precision_u64_f32, "average_precision_u64_f32", u64, f32, m);
+    average_precision_py!(average_precision_bool_f64, "average_precision_bool_f64", bool, f64, m);
+    average_precision_py!(average_precision_i8_f64, "average_precision_i8_f64", i8, f64, m);
+    average_precision_py!(average_precision_i16_f64, "average_precision_i16_f64", i16, f64, m);
+    average_precision_py!(average_precision_i32_f64, "average_precision_i32_f64", i32, f64, m);
+    average_precision_py!(average_precision_i64_f64, "average_precision_i64_f64", i64, f64, m);
+    average_precision_py!(average_precision_u8_f64, "average_precision_u8_f64", u8, f64, m);
+    average_precision_py!(average_precision_u16_f64, "average_precision_u16_f64", u16, f64, m);
+    average_precision_py!(average_precision_u32_f64, "average_precision_u32_f64", u32, f64, m);
+    average_precision_py!(average_precision_u64_f64, "average_precision_u64_f64", u64, f64, m);
 
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_bool_f32, m)?).unwrap();
