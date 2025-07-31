@@ -724,6 +724,29 @@ macro_rules! average_precision_py {
 }
 
 
+macro_rules! roc_auc_py {
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
+        #[pyfunction(name = $pyname)]
+        #[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
+        pub fn $fname<'py>(
+            py: Python<'py>,
+            labels: PyReadonlyArray1<'py, $label_type>,
+            predictions: PyReadonlyArray1<'py, $prediction_type>,
+            weights: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            order: Option<PyOrder>,
+            max_fpr: Option<f64>,
+        ) -> f64
+        {
+            return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
+        }
+    };
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
+        roc_auc_py!($fname, $pyname, $label_type, $prediction_type);
+        $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
+    };
+}
+
+
 pub fn average_precision_on_two_sorted_samples_py_generic<'py, B, F>(
     py: Python<'py>,
     labels1: PyReadonlyArray1<'py, B>,
@@ -1081,258 +1104,6 @@ pub fn average_precision_on_two_sorted_samples_py<'py>(
 }
 
 
-#[pyfunction(name = "roc_auc_bool_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_bool_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, bool>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_i8_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_i8_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i8>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_i16_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_i16_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i16>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_i32_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_i32_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i32>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_i64_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_i64_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i64>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_u8_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_u8_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u8>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_u16_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_u16_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u16>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_u32_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_u32_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u32>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_u64_f32")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_u64_f32<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u64>,
-    predictions: PyReadonlyArray1<'py, f32>,
-    weights: Option<PyReadonlyArray1<'py, f32>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_bool_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_bool_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, bool>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_i8_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_i8_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i8>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_i16_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_i16_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i16>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_i32_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_i32_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i32>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_i64_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_i64_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, i64>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_u8_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_u8_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u8>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_u16_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_u16_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u16>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_u32_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_u32_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u32>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
-#[pyfunction(name = "roc_auc_u64_f64")]
-#[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
-pub fn roc_auc_u64_f64<'py>(
-    py: Python<'py>,
-    labels: PyReadonlyArray1<'py, u64>,
-    predictions: PyReadonlyArray1<'py, f64>,
-    weights: Option<PyReadonlyArray1<'py, f64>>,
-    order: Option<PyOrder>,
-    max_fpr: Option<f64>
-) -> f64 {
-    return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
-}
-
-
 #[pyfunction(name = "loo_cossim")]
 #[pyo3(signature = (data))]
 pub fn loo_cossim_py<'py>(
@@ -1437,6 +1208,25 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     average_precision_py!(average_precision_u32_f64, "average_precision_u32_f64", u32, f64, m);
     average_precision_py!(average_precision_u64_f64, "average_precision_u64_f64", u64, f64, m);
 
+    roc_auc_py!(roc_auc_bool_f32, "roc_auc_bool_f32", bool, f32, m);
+    roc_auc_py!(roc_auc_i8_f32, "roc_auc_i8_f32", i8, f32, m);
+    roc_auc_py!(roc_auc_i16_f32, "roc_auc_i16_f32", i16, f32, m);
+    roc_auc_py!(roc_auc_i32_f32, "roc_auc_i32_f32", i32, f32, m);
+    roc_auc_py!(roc_auc_i64_f32, "roc_auc_i64_f32", i64, f32, m);
+    roc_auc_py!(roc_auc_u8_f32, "roc_auc_u8_f32", u8, f32, m);
+    roc_auc_py!(roc_auc_u16_f32, "roc_auc_u16_f32", u16, f32, m);
+    roc_auc_py!(roc_auc_u32_f32, "roc_auc_u32_f32", u32, f32, m);
+    roc_auc_py!(roc_auc_u64_f32, "roc_auc_u64_f32", u64, f32, m);
+    roc_auc_py!(roc_auc_bool_f64, "roc_auc_bool_f64", bool, f64, m);
+    roc_auc_py!(roc_auc_i8_f64, "roc_auc_i8_f64", i8, f64, m);
+    roc_auc_py!(roc_auc_i16_f64, "roc_auc_i16_f64", i16, f64, m);
+    roc_auc_py!(roc_auc_i32_f64, "roc_auc_i32_f64", i32, f64, m);
+    roc_auc_py!(roc_auc_i64_f64, "roc_auc_i64_f64", i64, f64, m);
+    roc_auc_py!(roc_auc_u8_f64, "roc_auc_u8_f64", u8, f64, m);
+    roc_auc_py!(roc_auc_u16_f64, "roc_auc_u16_f64", u16, f64, m);
+    roc_auc_py!(roc_auc_u32_f64, "roc_auc_u32_f64", u32, f64, m);
+    roc_auc_py!(roc_auc_u64_f64, "roc_auc_u64_f64", u64, f64, m);
+
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_bool_f32, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i8_f32, m)?).unwrap();
@@ -1456,25 +1246,6 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u16_f64, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u32_f64, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u64_f64, m)?).unwrap();
-
-    m.add_function(wrap_pyfunction!(roc_auc_bool_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_i8_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_i16_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_i32_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_i64_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_u8_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_u16_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_u32_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_u64_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_bool_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_i8_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_i16_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_i32_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_i64_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_u8_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_u16_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_u32_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(roc_auc_u64_f64, m)?).unwrap();
 
     m.add_function(wrap_pyfunction!(loo_cossim_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f64, m)?).unwrap();
