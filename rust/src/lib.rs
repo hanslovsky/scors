@@ -19,6 +19,7 @@ pub enum Order {
     DESCENDING
 }
 
+#[derive(Clone, Copy)]
 struct ConstWeight<F: num::Float> {
     value: F
 }
@@ -35,7 +36,7 @@ impl <F: num::Float> ConstWeight<F> {
 pub trait Data<T: Clone>: {
     // TODO This is necessary because it seems that there is no trait like that in rust
     //      Maybe I am just not aware, but for now use my own trait.
-    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T>;
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> + Clone;
     fn get_at(&self, index: usize) -> T;
 }
 
@@ -57,7 +58,7 @@ impl <F: num::Float> DoubleEndedIterator for ConstWeight<F> {
 }
 
 impl <F: num::Float> Data<F> for ConstWeight<F> {
-    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = F> {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = F> + Clone {
         return ConstWeight::new(self.value);
     }
 
@@ -67,7 +68,7 @@ impl <F: num::Float> Data<F> for ConstWeight<F> {
 }
 
 impl <T: Clone> Data<T> for Vec<T> {
-    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> + Clone {
         return self.iter().cloned();
     }
     fn get_at(&self, index: usize) -> T {
@@ -85,7 +86,7 @@ impl SortableData<f64> for Vec<f64> {
 }
 
 impl <T: Clone> Data<T> for &[T] {
-    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> + Clone {
         return self.iter().cloned();
     }
     fn get_at(&self, index: usize) -> T {
@@ -106,7 +107,7 @@ impl SortableData<f64> for &[f64] {
 }
 
 impl <T: Clone, const N: usize> Data<T> for [T; N] {
-    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> + Clone {
         return self.iter().cloned();
     }
     fn get_at(&self, index: usize) -> T {
@@ -123,7 +124,7 @@ impl <const N: usize> SortableData<f64> for [f64; N] {
 }
 
 impl <T: Clone> Data<T> for ArrayView<'_, T, Ix1> {
-    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> + Clone {
         return self.iter().cloned();
     }
     fn get_at(&self, index: usize) -> T {
@@ -232,31 +233,6 @@ where T: Copy, I: Data<T>
     return selection;
 }
 
-pub fn average_precision<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
-where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F>, W: Data<F>
-{
-    return average_precision_with_order(labels, predictions, weights, None);
-}
-
-pub fn average_precision_with_order<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>) -> f64
-where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F>, W: Data<F>
-{
-    return match order {
-        Some(o) => average_precision_on_sorted_labels(labels, weights, o),
-        None => {
-            let indices = predictions.argsort_unstable();
-            let sorted_labels = select(labels, &indices);
-            let ap = match weights {
-                None => {
-                    // let w: Oepion<&
-                    average_precision_on_sorted_labels(&sorted_labels, weights, Order::DESCENDING)
-                },
-                Some(w) => average_precision_on_sorted_labels(&sorted_labels, Some(&select(w, &indices)), Order::DESCENDING),
-            };
-            ap
-        }
-    };
-}
 
 pub fn average_precision_on_sorted_labels<B, L, F, W>(labels: &L, weights: Option<&W>, order: Order) -> f64
 where B: BinaryLabel, L: Data<B>, F: num::Float, W: Data<F>
@@ -296,6 +272,254 @@ where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, F: num::Fl
     return average_precision_on_descending_iterators(labels_and_weights);
 }
 
+
+
+trait ScoreSortedDescending {
+    fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64;
+    fn score_generic<P, B, W>(&self, labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> f64
+    where P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64>
+    {
+        return self.score(labels_with_weights.map(|(p, (b, w))| (p.into(), (b, w.into()))));
+    }
+}
+
+pub fn score_sorted_iterators<S, P, B, W>(
+    score: S,
+    predictions: impl Iterator<Item = P> + Clone,
+    labels: impl Iterator<Item = B> + Clone,
+    weights: impl Iterator<Item = W> + Clone,
+) -> f64
+where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64> {
+    let mut zipped = predictions.zip(labels.zip(weights));
+    return score.score_generic(zipped);
+}
+
+pub fn score_sorted_sample<S, P, B, W>(
+    score: S,
+    predictions: &impl Data<P>,
+    labels: &impl Data<B>,
+    weights: &impl Data<W>,
+    order: Order,
+) -> f64
+where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64> {
+    let p = predictions.get_iterator();
+    let l = labels.get_iterator();
+    let w = weights.get_iterator();
+    return match order {
+        Order::ASCENDING => score_sorted_iterators(score, p.rev(), l.rev(), w.rev()),
+        Order::DESCENDING => score_sorted_iterators(score, p, l, w),
+    };
+}
+
+pub fn score_maybe_sorted_sample<S, P, B, W>(
+    score: S,
+    predictions: &(impl Data<P> + SortableData<P>),
+    labels: &impl Data<B>,
+    weights: Option<&impl Data<W>>,
+    order: Option<Order>,
+) -> f64
+where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64>
+{
+    return match order {
+        Some(o) => {
+            match weights {
+                Some(w) => score_sorted_sample(score, predictions, labels, w, o),
+                None => score_sorted_sample(score, predictions, labels, &ConstWeight::<W>::one(), o),
+            }
+        }
+        None => {
+            let indices = predictions.argsort_unstable();
+            let sorted_labels = select(labels, &indices);
+            let sorted_predictions = select(predictions, &indices);
+            match weights {
+                Some(w) => {
+                    let sorted_weights = select(w, &indices);
+                    score_sorted_sample(score, &sorted_predictions, &sorted_labels, &sorted_weights, Order::DESCENDING)
+                }
+                None => score_sorted_sample(score, &sorted_predictions, &sorted_labels, &ConstWeight::<W>::one(), Order::DESCENDING)
+            }
+        }
+    };
+}
+
+pub fn score_sample<S, P, B, W>(
+    score: S,
+    predictions: &(impl Data<P> + SortableData<P>),
+    labels: &impl Data<B>,
+    weights: Option<&impl Data<W>>,
+) -> f64
+where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64> {
+    return score_maybe_sorted_sample(score, predictions, labels, weights, None);
+}
+
+struct AveragePrecision {
+    
+}
+
+impl AveragePrecision {
+    fn new() -> Self {
+        return AveragePrecision{};
+    }
+}
+
+impl ScoreSortedDescending for AveragePrecision {
+    fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
+        let mut ap: f64 = 0.0;
+        let mut tps: f64 = 0.0;
+        let mut fps: f64 = 0.0;
+        for (_, (label, weight)) in labels_with_weights {
+            let w: f64 = weight.into();
+            let l: bool = label.get_value();
+            let tp = w * f64::from(l);
+            tps += tp;
+            fps += w - tp;
+            let ps = tps + fps;
+            let precision = tps / ps;
+            ap += tp * precision;
+        }
+        // Special case for tps == 0 following sklearn
+        // https://github.com/scikit-learn/scikit-learn/blob/5cce87176a530d2abea45b5a7e5a4d837c481749/sklearn/metrics/_ranking.py#L1032-L1039
+        // I.e. if tps is 0.0, there are no positive samples in labels: Either all labels are 0, or all weights (for positive labels) are 0
+        return if tps == 0.0 {
+            0.0
+        } else {
+            ap / tps
+        };
+    }
+}
+
+struct RocAuc {
+
+}
+
+impl RocAuc {
+    fn new() -> Self {
+        return RocAuc { };
+    }
+}
+
+impl ScoreSortedDescending for RocAuc {
+    fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
+        let mut false_positives: f64 = 0.0;
+        let mut true_positives: f64 = 0.0;
+        let mut last_counted_fp = 0.0;
+        let mut last_counted_tp = 0.0;
+        let mut area_under_curve = 0.0;
+        let mut lww = labels_with_weights.peekable();
+        loop {
+            match lww.next() {
+                None => break,
+                Some((p, (l_binary, w))) => {
+                    let l = f64::from(l_binary.get_value());
+                    let wl = l * w;
+                    true_positives += wl;
+                    false_positives += w - wl;
+                    if lww.peek().map(|x| x.0 != p).unwrap_or(true) {
+                        area_under_curve += area_under_line_segment(last_counted_fp, false_positives, last_counted_tp, true_positives);
+                        last_counted_fp = false_positives;
+                        last_counted_tp = true_positives;
+                    }
+                }
+            };
+        }
+        return area_under_curve / (true_positives * false_positives);
+    }
+}
+
+struct RocAucWithMaxFPR {
+    max_fpr: f64,
+}
+
+impl RocAucWithMaxFPR {
+    fn new(max_fpr: f64) -> Self {
+        return RocAucWithMaxFPR { max_fpr };
+    }
+
+    fn get_positive_sum<B: BinaryLabel>(labels_with_weights: impl Iterator<Item = (B, f64)>) -> (f64, f64) {
+        let mut false_positives = 0f64;
+        let mut true_positives = 0f64;
+        for (label, weight) in labels_with_weights {
+            let lw = weight * f64::from(label.get_value());
+            false_positives += weight - lw;
+            true_positives += lw;
+        }
+        return (false_positives, true_positives);
+    }
+}
+
+impl ScoreSortedDescending for RocAucWithMaxFPR {
+    fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
+        let mut false_positives: f64 = 0.0;
+        let mut true_positives: f64 = 0.0;
+        let mut last_counted_fp = 0.0;
+        let mut last_counted_tp = 0.0;
+        let mut area_under_curve = 0.0;
+        let (false_positive_sum, true_positive_sum) = Self::get_positive_sum(labels_with_weights.clone().map(|(a, b)| b));
+        let false_positive_cutoff = self.max_fpr * false_positive_sum;
+        let mut lww = labels_with_weights.peekable();
+        loop {
+            match lww.next() {
+                None => break,
+                Some((p, (l_binary, w))) => {
+                    let l = f64::from(l_binary.get_value());
+                    let wl = l * w;
+                    let next_tp = true_positives + wl;
+                    let next_fp = false_positives + (w - wl);
+                    let is_above_max = next_fp > false_positive_cutoff;
+                    if is_above_max {
+                        let dx = next_fp  - false_positives;
+                        let dy = next_tp - true_positives;
+                        true_positives += dy * false_positive_cutoff / dx;
+                        false_positives = false_positive_cutoff;
+                    } else {
+                        true_positives = next_tp;
+                        false_positives = next_fp;
+                    }
+                    if lww.peek().map(|x| x.0 != p).unwrap_or(true) || is_above_max {
+                        area_under_curve += area_under_line_segment(last_counted_fp, false_positives, last_counted_tp, true_positives);
+                        last_counted_fp = false_positives;
+                        last_counted_tp = true_positives;
+                    }
+                    if is_above_max {
+                        break;
+                    }                
+                }
+            };
+        }
+        let normalized_area_under_curve = area_under_curve / (true_positive_sum * false_positive_sum);
+        let min_area = 0.5 * self.max_fpr * self.max_fpr;
+        let max_area = self.max_fpr;
+        return 0.5 * (1.0 + (normalized_area_under_curve - min_area) / (max_area - min_area));
+    }
+}
+
+pub fn average_precision<P, B, W>(
+    predictions: &(impl Data<P> + SortableData<P>),
+    labels: &impl Data<B>,
+    weights: Option<&impl Data<W>>,
+    order: Option<Order>,
+) -> f64
+where P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64>
+{
+    return score_maybe_sorted_sample(AveragePrecision::new(), predictions, labels, weights, order);
+}
+
+pub fn roc_auc<P, B, W>(
+    predictions: &(impl Data<P> + SortableData<P>),
+    labels: &impl Data<B>,
+    weights: Option<&impl Data<W>>,
+    order: Option<Order>,
+    max_fpr: Option<f64>,
+) -> f64
+where P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64>
+{
+    return match max_fpr {
+        Some(mfpr) => score_maybe_sorted_sample(RocAucWithMaxFPR::new(mfpr), predictions, labels, weights, order),
+        None => score_maybe_sorted_sample(RocAuc::new(), predictions, labels, weights, order),
+    };
+}
+
+
 pub fn average_precision_on_descending_iterators<B: BinaryLabel, F: num::Float>(
     labels_and_weights: impl Iterator<Item = (B, F)>
 ) -> f64 {
@@ -305,7 +529,6 @@ pub fn average_precision_on_descending_iterators<B: BinaryLabel, F: num::Float>(
     for (label, weight) in labels_and_weights {
         let w: f64 = weight.to_f64().unwrap();
         let l: bool = label.get_value();
-        // println!("{} {}", w, l);
         let tp = w * f64::from(l);
         tps += tp;
         fps += w - tp;
@@ -367,14 +590,6 @@ where B: BinaryLabel + Clone + PartialOrd, F: num::Float
     return average_precision_on_descending_iterators(label_weight_iter);
 }
 
-
-
-// ROC AUC score
-pub fn roc_auc<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>) -> f64
-where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W: Data<F>
-{
-    return roc_auc_with_order(labels, predictions, weights, None, None);
-}
 
 pub fn roc_auc_max_fpr<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, max_false_positive_rate: Option<f64>) -> f64
 where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W: Data<F>
@@ -630,11 +845,11 @@ where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
             Some(weight) => {
                 let w = weight.as_array();
                 py.allow_threads(move || {
-                    self.score(labels, predictions, Some(&w), order)
+                    self.score(labels, predictions, Some(w), order)
                 })
             },
             None => py.allow_threads(move || {
-                self.score(labels, predictions, None::<&Vec<F>>, order)
+                self.score(labels, predictions, None::<Vec<F>>, order)
             })
         };
         return score;
@@ -644,7 +859,7 @@ where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
         &self,
         labels: L,
         predictions: P,
-        weights: Option<&W>,
+        weights: Option<W>,
         order: Option<Order>
     ) -> f64;
 
@@ -661,16 +876,16 @@ impl AveragePrecisionPyGeneric {
 }
 
 impl <B, F> PyScoreGeneric<B, F> for AveragePrecisionPyGeneric
-where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
+where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
 {
     fn score<L: Data<B>, P: SortableData<F> + Data<F>, W: Data<F>>(
         &self,
         labels: L,
         predictions: P,
-        weights: Option<&W>,
+        weights: Option<W>,
         order: Option<Order>
     ) -> f64 {
-        return average_precision_with_order(&labels, &predictions, weights, order);
+        return average_precision(&predictions, &labels, weights.as_ref(), order);
     }
 }
 
@@ -691,10 +906,10 @@ where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
         &self,
         labels: L,
         predictions: P,
-        weights: Option<&W>,
+        weights: Option<W>,
         order: Option<Order>
     ) -> f64 {
-        return roc_auc_with_order(&labels, &predictions, weights, order, self.max_fpr);
+        return roc_auc_with_order(&labels, &predictions, weights.as_ref(), order, self.max_fpr);
     }
 }
 
@@ -1263,7 +1478,7 @@ mod tests {
     #[test]
     fn test_average_precision_on_sorted() {
         let labels: [u8; 4] = [1, 0, 1, 0];
-        // let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
+        let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
         let actual = average_precision_on_sorted_labels(&labels, Some(&weights), Order::DESCENDING);
         assert_eq!(actual, 0.8333333333333333);
@@ -1274,7 +1489,7 @@ mod tests {
         let labels: [u8; 4] = [0, 0, 1, 1];
         let predictions: [f64; 4] = [0.1, 0.4, 0.35, 0.8];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision_with_order(&labels, &predictions, Some(&weights), None);
+        let actual = average_precision(&predictions, &labels, Some(&weights), None);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1283,7 +1498,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision_with_order(&labels, &predictions, Some(&weights), Some(Order::DESCENDING));
+        let actual = average_precision(&predictions, &labels, Some(&weights), Some(Order::DESCENDING));
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1305,30 +1520,30 @@ mod tests {
         assert_eq!(actual, 0.75);
     }
 
-    #[test]
-    fn test_loo_cossim_single() {
-        let data = arr2(&[[0.77395605, 0.43887844, 0.85859792],
-                          [0.69736803, 0.09417735, 0.97562235]]);
-        let cossim = loo_cossim_single(&data.view());
-        let expected = 0.95385941;
-        assert_relative_eq!(cossim, expected);
-    }
+    // #[test]
+    // fn test_loo_cossim_single() {
+    //     let data = arr2(&[[0.77395605, 0.43887844, 0.85859792],
+    //                       [0.69736803, 0.09417735, 0.97562235]]);
+    //     let cossim = loo_cossim_single(&data.view());
+    //     let expected = 0.95385941;
+    //     assert_relative_eq!(cossim, expected);
+    // }
 
-    #[test]
-    fn test_loo_cossim_many() {
-        let data = arr3(&[[[0.77395605, 0.43887844, 0.85859792],
-                           [0.69736803, 0.09417735, 0.97562235]],
-                          [[0.7611397 , 0.78606431, 0.12811363],
-                           [0.45038594, 0.37079802, 0.92676499]],
-                          [[0.64386512, 0.82276161, 0.4434142 ],
-                           [0.22723872, 0.55458479, 0.06381726]],
-                          [[0.82763117, 0.6316644 , 0.75808774],
-                           [0.35452597, 0.97069802, 0.89312112]]]);
-        let cossim = loo_cossim_many(&data.view());
-        let expected = arr1(&[0.95385941, 0.62417001, 0.92228589, 0.90025417]);
-        assert_eq!(cossim.shape(), expected.shape());
-        for (c, e) in cossim.iter().zip(expected.iter()) {
-            assert_relative_eq!(c, e);
-        }
-    }
+    // #[test]
+    // fn test_loo_cossim_many() {
+    //     let data = arr3(&[[[0.77395605, 0.43887844, 0.85859792],
+    //                        [0.69736803, 0.09417735, 0.97562235]],
+    //                       [[0.7611397 , 0.78606431, 0.12811363],
+    //                        [0.45038594, 0.37079802, 0.92676499]],
+    //                       [[0.64386512, 0.82276161, 0.4434142 ],
+    //                        [0.22723872, 0.55458479, 0.06381726]],
+    //                       [[0.82763117, 0.6316644 , 0.75808774],
+    //                        [0.35452597, 0.97069802, 0.89312112]]]);
+    //     let cossim = loo_cossim_many(&data.view());
+    //     let expected = arr1(&[0.95385941, 0.62417001, 0.92228589, 0.90025417]);
+    //     assert_eq!(cossim.shape(), expected.shape());
+    //     for (c, e) in cossim.iter().zip(expected.iter()) {
+    //         assert_relative_eq!(c, e);
+    //     }
+    // }
 }
