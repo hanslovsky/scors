@@ -900,7 +900,7 @@ impl RocAucPyGeneric {
 }
 
 impl <B, F> PyScoreGeneric<B, F> for RocAucPyGeneric
-where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
+where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
 {
     fn score<L: Data<B>, P: SortableData<F> + Data<F>, W: Data<F>>(
         &self,
@@ -909,7 +909,7 @@ where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
         weights: Option<W>,
         order: Option<Order>
     ) -> f64 {
-        return roc_auc_with_order(&labels, &predictions, weights.as_ref(), order, self.max_fpr);
+        return roc_auc(&predictions, &labels, weights.as_ref(), order, self.max_fpr);
     }
 }
 
