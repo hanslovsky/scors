@@ -352,6 +352,39 @@ where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: nu
     return score_maybe_sorted_sample(score, predictions, labels, weights, None);
 }
 
+
+
+
+pub fn score_two_sorted_samples<S, P, B, W>(
+    score: S,
+    predictions1: impl Iterator<Item = P> + Clone,
+    label1: impl Iterator<Item = B> + Clone,
+    weight1: impl Iterator<Item = W> + Clone,
+    predictions2: impl Iterator<Item = P> + Clone,
+    label2: impl Iterator<Item = B> + Clone,
+    weight2: impl Iterator<Item = W> + Clone,
+) -> f64
+where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel + PartialOrd, W: num::Float + Into<f64>
+{
+    return score_two_sorted_samples_zipped(
+        score,
+        predictions1.zip(label1.zip(weight1)),
+        predictions2.zip(label2.zip(weight2)),
+    );
+}
+
+
+pub fn score_two_sorted_samples_zipped<S, P, B, W>(
+    score: S,
+    iter1: impl Iterator<Item = (P, (B, W))> + Clone,
+    iter2: impl Iterator<Item = (P, (B, W))> + Clone,
+) -> f64
+where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel + PartialOrd, W: num::Float + Into<f64>
+{
+    let combined_iter = combine::combine::CombineIterDescending::new(iter1, iter2);
+    return score.score_generic(combined_iter);
+}
+
 struct AveragePrecision {
     
 }
@@ -544,50 +577,6 @@ pub fn average_precision_on_descending_iterators<B: BinaryLabel, F: num::Float>(
     } else {
         ap / tps
     };
-}
-
-pub fn average_precision_on_two_sorted_samples<'a, B, L, P, W>(
-    sample1: SortedSampleDescending<'a, B, L, P, W>,
-    sample2: SortedSampleDescending<'a, B, L, P, W>
-) -> f64
-where B: BinaryLabel + Clone + PartialOrd + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: IntoIterator<Item = &'a f64>, &'a W: IntoIterator<Item = &'a f64>
-{
-    let iter1 = sample1.predictions.into_iter().cloned().zip(
-        sample1.labels.into_iter().cloned().zip(sample1.weights.into_iter().cloned())
-    );
-    let iter2 = sample2.predictions.into_iter().cloned().zip(
-        sample2.labels.into_iter().cloned().zip(sample2.weights.into_iter().cloned())
-    );
-    return average_precision_on_two_sorted_descending_iterators(iter1, iter2,);
-}
-
-
-pub fn average_precision_on_two_sorted_descending_iterators_unzipped<B>(
-    label1: impl Iterator<Item = B>,
-    score1: impl Iterator<Item = f64>,
-    weight1: impl Iterator<Item = f64>,
-    label2: impl Iterator<Item = B>,
-    score2: impl Iterator<Item = f64>,
-    weight2: impl Iterator<Item = f64>,
-) -> f64 
-where B: BinaryLabel + Clone + PartialOrd
-{
-    return  average_precision_on_two_sorted_descending_iterators(
-        score1.zip(label1.zip(weight1)),
-        score2.zip(label2.zip(weight2)),
-    );
-}
-
-
-pub fn average_precision_on_two_sorted_descending_iterators<B, F>(
-    iter1: impl Iterator<Item = (F, (B, F))>,
-    iter2: impl Iterator<Item = (F, (B, F))>,
-) -> f64
-where B: BinaryLabel + Clone + PartialOrd, F: num::Float
-{
-    let combined_iter = combine::combine::CombineIterDescending::new(iter1, iter2);
-    let label_weight_iter = combined_iter.map(|(a, b)| b);
-    return average_precision_on_descending_iterators(label_weight_iter);
 }
 
 
@@ -977,31 +966,32 @@ where B: BinaryLabel + Clone + PartialOrd + Element, F: num::Float + Element
     let l2 = labels2.as_array().into_iter().cloned();
     let p1 = predictions1.as_array().into_iter().map(|f| f.to_f64().unwrap());
     let p2 = predictions2.as_array().into_iter().map(|f| f.to_f64().unwrap());
+    let score = AveragePrecision::new();
 
 
     return match (weights1, weights2) {
         (None, None) => {
             py.allow_threads(move || {
-                average_precision_on_two_sorted_descending_iterators_unzipped(l1, p1, repeat(1.0f64), l2, p2, repeat(1.0f64))
+                score_two_sorted_samples(score, p1, l1, repeat(1.0f64), p2, l2, repeat(1.0f64))
             })
         }
         (Some(w1), None) => {
             let w1i = w1.as_array().into_iter().map(|f| f.to_f64().unwrap());
             py.allow_threads(move || {
-                average_precision_on_two_sorted_descending_iterators_unzipped(l1, p1, w1i, l2, p2, repeat(1.0f64))
+                score_two_sorted_samples(score, p1, l1, w1i, p2, l2, repeat(1.0f64))
             })
         }
         (None, Some(w2)) => {
             let w2i = w2.as_array().into_iter().map(|f| f.to_f64().unwrap());
             py.allow_threads(move || {
-                average_precision_on_two_sorted_descending_iterators_unzipped(l1, p1, repeat(1.0f64), l2, p2, w2i)
+                score_two_sorted_samples(score, p1, l1, repeat(1.0f64), p2, l2, w2i)
             })
         }
         (Some(w1), Some(w2)) =>  {
             let w1i = w1.as_array().into_iter().map(|f| f.to_f64().unwrap());
             let w2i = w2.as_array().into_iter().map(|f| f.to_f64().unwrap());
             py.allow_threads(move || {
-                average_precision_on_two_sorted_descending_iterators_unzipped(l1, p1, w1i, l2, p2, w2i)
+                score_two_sorted_samples(score, p1, l1, w1i, p2, l2, w2i)
             })
         }
     };
@@ -1278,47 +1268,6 @@ pub fn average_precision_on_two_sorted_samples_u64_f64<'py>(
 }
 
 
-#[pyfunction(name = "average_precision_on_two_sorted_samples")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_py<'py>(
-    py: Python<'py>,
-    labels1: &Bound<'py, PyUntypedArray>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: &Bound<'py, PyUntypedArray>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> PyResult<f64> {
-    let dtype1 = labels1.dtype();
-    let dtype2 = labels2.dtype();
-    if dtype1.is_equiv_to(&dtype::<u8>(py)) && dtype2.is_equiv_to(&dtype::<u8>(py)) {
-        let labels1_dc = labels1.downcast::<PyArray1<u8>>().unwrap().readonly();
-        let labels2_dc = labels2.downcast::<PyArray1<u8>>().unwrap().readonly();
-        let labels1_arr = labels1_dc.as_array();
-        let labels2_arr = labels2_dc.as_array();
-        let predictions1_arr = predictions1.as_array();
-        let predictions2_arr = predictions2.as_array();
-        return match (weights1, weights2) {
-            (Some(w1), Some(w2)) => {
-                let w1_arr = w1.as_array();
-                let w2_arr = w2.as_array();
-                let score = py.allow_threads(move || {
-                    average_precision_on_two_sorted_samples(
-                        SortedSampleDescending::new(&labels1_arr, &predictions1_arr, &w1_arr),
-                        SortedSampleDescending::new(&labels2_arr, &predictions2_arr, &w2_arr),
-                    )
-                });
-                Ok(score)
-            }
-            (Some(w1), None) => Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now.")),
-            (None, Some(w2)) => Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now.")),
-            (None, None) => Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now.")),
-        };
-    }
-    return Err(PyTypeError::new_err("Only supporting weights and u8 labels as of now."));
-}
-
-
 #[pyfunction(name = "loo_cossim")]
 #[pyo3(signature = (data))]
 pub fn loo_cossim_py<'py>(
@@ -1442,7 +1391,6 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     roc_auc_py!(roc_auc_u32_f64, "roc_auc_u32_f64", u32, f64, m);
     roc_auc_py!(roc_auc_u64_f64, "roc_auc_u64_f64", u64, f64, m);
 
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_bool_f32, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i8_f32, m)?).unwrap();
     m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i16_f32, m)?).unwrap();

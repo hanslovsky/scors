@@ -3,13 +3,18 @@ pub mod combine {
     use std::iter::Peekable;
     use std::marker::PhantomData;
 
-    pub struct CombineIterDescending<T: PartialOrd, I1: Iterator<Item = T>, I2: Iterator<Item = T>> {
+    #[derive(Clone)]
+    pub struct CombineIterDescending<T: PartialOrd, I1: Iterator<Item = T>, I2: Iterator<Item = T>>
+    where T: PartialOrd, I1: Iterator<Item = T> + Clone, I2: Iterator<Item = T>
+    {
         p1: Peekable<I1>,
         p2: Peekable<I2>,
         _phantom: PhantomData<T>,
     }
 
-    impl <T: PartialOrd, I1: Iterator<Item = T>, I2: Iterator<Item = T>> CombineIterDescending<T, I1, I2> {
+    impl <T, I1, I2> CombineIterDescending<T, I1, I2> 
+    where T: PartialOrd, I1: Iterator<Item = T> + Clone, I2: Iterator<Item = T>
+    {
         pub fn new(i1: I1, i2: I2) -> Self {
             return CombineIterDescending {
                 p1: i1.peekable(),
@@ -19,7 +24,9 @@ pub mod combine {
         }
     }
 
-    impl <T: PartialOrd, I1: Iterator<Item = T>, I2: Iterator<Item = T>> Iterator for CombineIterDescending<T, I1, I2> {
+    impl <T, I1, I2> Iterator for CombineIterDescending<T, I1, I2> 
+    where T: PartialOrd, I1: Iterator<Item = T> + Clone, I2: Iterator<Item = T>
+    {
         type Item = T;
 
         fn next(&mut self) -> Option<T> {
