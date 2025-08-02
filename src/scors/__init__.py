@@ -81,9 +81,6 @@ def roc_auc(labels: np.ndarray, predictions: np.ndarray, weights: np.ndarray | N
     return _from_generic_score("roc_auc")(labels=labels, predictions=predictions, weights=weights, order=order, max_fpr=max_fpr)
 
 
-average_precision_on_two_sorted_samples_deprecated = average_precision_on_two_sorted_samples
-
-
 def average_precision_on_two_sorted_samples(
     labels1: np.ndarray,    
     predictions1: np.ndarray,
