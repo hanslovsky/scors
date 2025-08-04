@@ -96,12 +96,8 @@ impl <T: Clone> Data<T> for &[T] {
 
 impl SortableData<f64> for &[f64] {
     fn argsort_unstable(&self) -> Vec<usize> {
-        // let t0 = Instant::now();
         let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
-        // println!("Creating indices took {}ms", t0.elapsed().as_millis());
-        // let t1 = Instant::now();
         indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
-        // println!("Sorting took {}ms", t0.elapsed().as_millis());
         return indices;
     }
 }
@@ -234,46 +230,6 @@ where T: Copy, I: Data<T>
 }
 
 
-pub fn average_precision_on_sorted_labels<B, L, F, W>(labels: &L, weights: Option<&W>, order: Order) -> f64
-where B: BinaryLabel, L: Data<B>, F: num::Float, W: Data<F>
-{
-    return match weights {
-        None => average_precision_on_iterator(labels.get_iterator(), ConstWeight::<F>::one(), order),
-        Some(w) => average_precision_on_iterator(labels.get_iterator(), w.get_iterator(), order)
-    };
-}
-
-pub fn average_precision_on_iterator<B, L, F, W>(labels: L, weights: W, order: Order) -> f64
-where B: BinaryLabel, L: DoubleEndedIterator<Item = B>, F: num::Float, W: DoubleEndedIterator<Item = F>
-{
-    return match order {
-        Order::ASCENDING => average_precision_on_descending_iterator(labels.rev(), weights.rev()),
-        Order::DESCENDING => average_precision_on_descending_iterator(labels, weights)
-    };
-}
-
-pub fn average_precision_on_descending_iterator<B: BinaryLabel, F: num::Float>(labels: impl Iterator<Item = B>, weights: impl Iterator<Item = F>) -> f64 {
-    return average_precision_on_descending_iterators(labels.zip(weights));
-}
-
-pub fn average_precision_on_sorted_samples<'a, B, L, F, P, W>(l1: &'a L, p1: &'a P, w1: &'a W, l2: &'a L, p2: &'a P, w2: &'a W) -> f64
-where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, F: num::Float + Clone + 'a, &'a P: IntoIterator<Item = &'a F>, &'a W: IntoIterator<Item = &'a F>
-{
-    // let mut it1 = p1.into_iter();
-    let i1 = p1.into_iter().cloned().zip(l1.into_iter().cloned().zip(w1.into_iter().cloned()));
-    let i2 = p2.into_iter().cloned().zip(l2.into_iter().cloned().zip(w2.into_iter().cloned()));
-    let labels_and_weights = i1.zip(i2).map(|(t1, t2)| {
-        if t1.0 > t2.0 {
-            t1.1
-        } else {
-            t2.1
-        }
-    });
-    return average_precision_on_descending_iterators(labels_and_weights);
-}
-
-
-
 trait ScoreSortedDescending {
     fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64;
     fn score_generic<P, B, W>(&self, labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> f64
@@ -282,6 +238,7 @@ trait ScoreSortedDescending {
         return self.score(labels_with_weights.map(|(p, (b, w))| (p.into(), (b, w.into()))));
     }
 }
+
 
 pub fn score_sorted_iterators<S, P, B, W>(
     score: S,
@@ -293,6 +250,7 @@ where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: nu
     let mut zipped = predictions.zip(labels.zip(weights));
     return score.score_generic(zipped);
 }
+
 
 pub fn score_sorted_sample<S, P, B, W>(
     score: S,
@@ -310,6 +268,7 @@ where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: nu
         Order::DESCENDING => score_sorted_iterators(score, p, l, w),
     };
 }
+
 
 pub fn score_maybe_sorted_sample<S, P, B, W>(
     score: S,
@@ -342,6 +301,7 @@ where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: nu
     };
 }
 
+
 pub fn score_sample<S, P, B, W>(
     score: S,
     predictions: &(impl Data<P> + SortableData<P>),
@@ -351,8 +311,6 @@ pub fn score_sample<S, P, B, W>(
 where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64> {
     return score_maybe_sorted_sample(score, predictions, labels, weights, None);
 }
-
-
 
 
 pub fn score_two_sorted_samples<S, P, B, W>(
@@ -385,9 +343,11 @@ where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel + Part
     return score.score_generic(combined_iter);
 }
 
+
 struct AveragePrecision {
     
 }
+
 
 impl AveragePrecision {
     fn new() -> Self {
@@ -395,41 +355,95 @@ impl AveragePrecision {
     }
 }
 
+
+#[derive(Debug)]
+struct Positives {
+    tps: f64,
+    fps: f64,
+}
+
+impl Positives {
+    fn new(tps: f64, fps: f64) -> Self {
+        return Positives { tps, fps };
+    }
+
+    fn zero() -> Self {
+        return Positives::new(0.0, 0.0);
+    }
+
+    fn add(&mut self, label: f64, weight: f64) {
+        let tp = weight * label;
+        let fp = weight - tp;  // (weight*(1 -label) = weight - weight * label = weight - tp)
+        self.tps += tp;
+        self.fps += fp;
+    }
+
+    fn positives_sum(&self) -> f64 {
+        return self.tps + self.fps;
+    }
+
+    fn precision(&self) -> f64 {
+        return self.tps / self.positives_sum();
+    }
+}
+
+
 impl ScoreSortedDescending for AveragePrecision {
-    fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
+    fn score<B: BinaryLabel>(&self, mut labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
+
+
+        let mut positives = Positives::zero();
+        let mut last_p = f64::NAN;
+        let mut last_tps: f64 = 0.0;
+        
         let mut ap: f64 = 0.0;
-        let mut tps: f64 = 0.0;
-        let mut fps: f64 = 0.0;
-        for (_, (label, weight)) in labels_with_weights {
-            let w: f64 = weight.into();
+
+        let mut loop_idx = 0;
+        let mut last_add_idx = 0;
+        
+        for (p, (label, w)) in labels_with_weights {
+            if loop_idx == 0 {
+                last_p = p;
+            }
+            loop_idx += 1;
+            if last_p != p {
+                ap += (positives.tps - last_tps) * positives.precision();
+                // println!("pos={:?} precision={} last_tps={} p={} last_p={}, i={}", positives, positives.precision(), last_tps, p, last_p, loop_idx);
+                last_p = p;
+                last_tps = positives.tps;
+                last_add_idx = loop_idx;
+            }
             let l: bool = label.get_value();
-            let tp = w * f64::from(l);
-            tps += tp;
-            fps += w - tp;
-            let ps = tps + fps;
-            let precision = tps / ps;
-            ap += tp * precision;
+            positives.add(f64::from(l), w);
         }
+
+        // if last_add_idx != loop_idx {
+        ap += (positives.tps - last_tps) * positives.precision();
+        // }
+        
         // Special case for tps == 0 following sklearn
         // https://github.com/scikit-learn/scikit-learn/blob/5cce87176a530d2abea45b5a7e5a4d837c481749/sklearn/metrics/_ranking.py#L1032-L1039
         // I.e. if tps is 0.0, there are no positive samples in labels: Either all labels are 0, or all weights (for positive labels) are 0
-        return if tps == 0.0 {
+        return if positives.tps == 0.0 {
             0.0
         } else {
-            ap / tps
+            ap / positives.tps
         };
     }
 }
 
+
 struct RocAuc {
 
 }
+
 
 impl RocAuc {
     fn new() -> Self {
         return RocAuc { };
     }
 }
+
 
 impl ScoreSortedDescending for RocAuc {
     fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
@@ -459,9 +473,11 @@ impl ScoreSortedDescending for RocAuc {
     }
 }
 
+
 struct RocAucWithMaxFPR {
     max_fpr: f64,
 }
+
 
 impl RocAucWithMaxFPR {
     fn new(max_fpr: f64) -> Self {
@@ -479,6 +495,7 @@ impl RocAucWithMaxFPR {
         return (false_positives, true_positives);
     }
 }
+
 
 impl ScoreSortedDescending for RocAucWithMaxFPR {
     fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
@@ -526,6 +543,7 @@ impl ScoreSortedDescending for RocAucWithMaxFPR {
     }
 }
 
+
 pub fn average_precision<P, B, W>(
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
@@ -536,6 +554,7 @@ where P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64>
 {
     return score_maybe_sorted_sample(AveragePrecision::new(), predictions, labels, weights, order);
 }
+
 
 pub fn roc_auc<P, B, W>(
     predictions: &(impl Data<P> + SortableData<P>),
@@ -586,6 +605,7 @@ where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W
     return roc_auc_with_order(labels, predictions, weights, None, max_false_positive_rate);
 }
 
+
 pub fn roc_auc_with_order<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
 where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W: Data<F>
 {
@@ -608,6 +628,8 @@ where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W
         }
     };
 }
+
+
 pub fn roc_auc_on_sorted_labels<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Order, max_false_positive_rate: Option<f64>) -> f64
 where B: BinaryLabel, L: Data<B>, F: num::Float, P: Data<F>, W: Data<F> {
     return match max_false_positive_rate {
@@ -626,6 +648,7 @@ where B: BinaryLabel, L: Data<B>, F: num::Float, P: Data<F>, W: Data<F> {
     };
 }
 
+
 pub fn roc_auc_on_sorted_iterator<B: BinaryLabel>(
     labels: &mut impl DoubleEndedIterator<Item = B>,
     predictions: &mut impl DoubleEndedIterator<Item = f64>,
@@ -637,6 +660,7 @@ pub fn roc_auc_on_sorted_iterator<B: BinaryLabel>(
         Order::DESCENDING => roc_auc_on_descending_iterator(labels, predictions, weights)
     }
 }
+
 
 pub fn roc_auc_on_descending_iterator<B: BinaryLabel>(
     labels: &mut impl Iterator<Item = B>,
@@ -669,11 +693,13 @@ pub fn roc_auc_on_descending_iterator<B: BinaryLabel>(
     return area_under_curve / (true_positives * false_positives);
 }
 
+
 fn area_under_line_segment(x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     let dx = x1 - x0;
     let dy = y1 - y0;
     return dx * y0 + dy * dx * 0.5;
 }
+
 
 fn get_positive_sum<B: BinaryLabel>(
     labels: impl Iterator<Item = B>,
@@ -688,6 +714,7 @@ fn get_positive_sum<B: BinaryLabel>(
     }
     return (false_positives, true_positives);
 }
+
 
 pub fn roc_auc_on_sorted_with_fp_cutoff<B, L, F, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: f64) -> f64
 where B: BinaryLabel, L: Data<B>, F: num::Float, P: Data<F>, W: Data<F> {
@@ -754,6 +781,7 @@ fn roc_auc_on_descending_iterator_with_fp_cutoff<B: BinaryLabel>(
     return 0.5 * (1.0 + (normalized_area_under_curve - min_area) / (max_area - min_area));
 }
 
+
 pub fn loo_cossim<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>, replicate_sum: &mut ArrayViewMut1<'_, F>) -> F {
     let num_replicates = mat.shape()[0];
     let loo_weight = F::from(num_replicates - 1).unwrap();
@@ -783,10 +811,12 @@ pub fn loo_cossim<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>, replicate_
     return result / F::from(num_replicates).unwrap();
 }
 
+
 pub fn loo_cossim_single<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>) -> F {
     let mut replicate_sum = Array1::<F>::zeros(mat.shape()[1]);
     return loo_cossim(mat, &mut replicate_sum.view_mut());
 }
+
 
 pub fn loo_cossim_many<F: num::Float + AddAssign>(mat: &ArrayView3<'_, F>) -> Array1<F> {
     let mut cossims = Array1::<F>::zeros(mat.shape()[0]);
@@ -1428,7 +1458,17 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision_on_sorted_labels(&labels, Some(&weights), Order::DESCENDING);
+        let actual = score_sorted_sample(AveragePrecision::new(), &predictions, &labels, &weights, Order::DESCENDING);
+        assert_eq!(actual, 0.8333333333333333);
+    }
+
+    #[test]
+    fn test_average_precision_on_sorted_double() {
+        // println!("This will fail!");
+        let labels: [u8; 8] = [1, 1, 0, 0, 1, 1, 0, 0];
+        let predictions: [f64; 8] = [0.8, 0.8, 0.4, 0.4, 0.35, 0.35, 0.1, 0.1];
+        let weights: [f64; 8] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        let actual = score_sorted_sample(AveragePrecision::new(), &predictions, &labels, &weights, Order::DESCENDING);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1455,7 +1495,15 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision_on_sorted_samples(&labels, &predictions, &weights, &labels, &predictions, &weights);
+        let actual = score_two_sorted_samples(
+            AveragePrecision::new(),
+            predictions.iter().cloned(),
+            labels.iter().cloned(),
+            weights.iter().cloned(),
+            predictions.iter().cloned(),
+            labels.iter().cloned(),
+            weights.iter().cloned()
+        );
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1467,31 +1515,4 @@ mod tests {
         let actual = roc_auc_with_order(&labels, &predictions, Some(&weights), Some(Order::DESCENDING), None);
         assert_eq!(actual, 0.75);
     }
-
-    // #[test]
-    // fn test_loo_cossim_single() {
-    //     let data = arr2(&[[0.77395605, 0.43887844, 0.85859792],
-    //                       [0.69736803, 0.09417735, 0.97562235]]);
-    //     let cossim = loo_cossim_single(&data.view());
-    //     let expected = 0.95385941;
-    //     assert_relative_eq!(cossim, expected);
-    // }
-
-    // #[test]
-    // fn test_loo_cossim_many() {
-    //     let data = arr3(&[[[0.77395605, 0.43887844, 0.85859792],
-    //                        [0.69736803, 0.09417735, 0.97562235]],
-    //                       [[0.7611397 , 0.78606431, 0.12811363],
-    //                        [0.45038594, 0.37079802, 0.92676499]],
-    //                       [[0.64386512, 0.82276161, 0.4434142 ],
-    //                        [0.22723872, 0.55458479, 0.06381726]],
-    //                       [[0.82763117, 0.6316644 , 0.75808774],
-    //                        [0.35452597, 0.97069802, 0.89312112]]]);
-    //     let cossim = loo_cossim_many(&data.view());
-    //     let expected = arr1(&[0.95385941, 0.62417001, 0.92228589, 0.90025417]);
-    //     assert_eq!(cossim.shape(), expected.shape());
-    //     for (c, e) in cossim.iter().zip(expected.iter()) {
-    //         assert_relative_eq!(c, e);
-    //     }
-    // }
 }
