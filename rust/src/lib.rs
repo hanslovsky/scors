@@ -391,35 +391,28 @@ impl Positives {
 impl ScoreSortedDescending for AveragePrecision {
     fn score<B: BinaryLabel>(&self, mut labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
 
-
         let mut positives = Positives::zero();
         let mut last_p = f64::NAN;
         let mut last_tps: f64 = 0.0;
         
         let mut ap: f64 = 0.0;
-
-        let mut loop_idx = 0;
-        let mut last_add_idx = 0;
         
         for (p, (label, w)) in labels_with_weights {
-            if loop_idx == 0 {
+            if last_p != last_p {
+                // TODO: Can we avoid this check here somehow?
+                //       Maybe we can do an iterator.next() step outside the loop to initialize last_p properly.
                 last_p = p;
             }
-            loop_idx += 1;
             if last_p != p {
                 ap += (positives.tps - last_tps) * positives.precision();
-                // println!("pos={:?} precision={} last_tps={} p={} last_p={}, i={}", positives, positives.precision(), last_tps, p, last_p, loop_idx);
                 last_p = p;
                 last_tps = positives.tps;
-                last_add_idx = loop_idx;
             }
             let l: bool = label.get_value();
             positives.add(f64::from(l), w);
         }
 
-        // if last_add_idx != loop_idx {
         ap += (positives.tps - last_tps) * positives.precision();
-        // }
         
         // Special case for tps == 0 following sklearn
         // https://github.com/scikit-learn/scikit-learn/blob/5cce87176a530d2abea45b5a7e5a4d837c481749/sklearn/metrics/_ranking.py#L1032-L1039
@@ -1464,7 +1457,6 @@ mod tests {
 
     #[test]
     fn test_average_precision_on_sorted_double() {
-        // println!("This will fail!");
         let labels: [u8; 8] = [1, 1, 0, 0, 1, 1, 0, 0];
         let predictions: [f64; 8] = [0.8, 0.8, 0.4, 0.4, 0.35, 0.35, 0.1, 0.1];
         let weights: [f64; 8] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
