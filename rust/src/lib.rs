@@ -1,16 +1,15 @@
 mod combine;
 
-use ndarray::{Array1,ArrayView1,ArrayView,ArrayView2,ArrayView3,ArrayViewMut1,Ix1};
+use ndarray::{Array1,ArrayView,ArrayView2,ArrayView3,ArrayViewMut1,Ix1};
 use num;
 use num::traits::float::TotalOrder;
-use numpy::{Element,PyArray,PyArray1,PyArray2,PyArray3,PyArrayDescr,PyArrayDescrMethods,PyArrayDyn,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
+use numpy::{Element,PyArray,PyArray1,PyArray2,PyArray3,PyArrayDescrMethods,PyArrayDyn,PyArrayMethods,PyReadonlyArray1,PyUntypedArray,PyUntypedArrayMethods,dtype};
 use pyo3::Bound;
 use pyo3::exceptions::PyTypeError;
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
 use std::cmp::PartialOrd;
 use std::iter::{DoubleEndedIterator,repeat};
-use std::marker::PhantomData;
 use std::ops::AddAssign;
 
 #[derive(Clone, Copy)]
@@ -196,28 +195,6 @@ impl BinaryLabel for i64 {
     }
 }
 
-struct SortedSampleDescending<'a, B, L, P, W>
-where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: IntoIterator<Item = &'a f64>, &'a W: IntoIterator<Item = &'a f64>
-{
-    labels: &'a L,
-    predictions: &'a P,
-    weights: &'a W,
-    label_type: PhantomData<B>,
-}
-
-impl <'a, B, L, P, W> SortedSampleDescending<'a, B, L, P, W>
-where B: BinaryLabel + Clone + 'a, &'a L: IntoIterator<Item = &'a B>, &'a P: IntoIterator<Item = &'a f64>, &'a W: IntoIterator<Item = &'a f64>
-{
-    fn new(labels: &'a L, predictions: &'a P, weights: &'a W) -> Self {
-        return SortedSampleDescending {
-            labels: labels,
-            predictions: predictions,
-            weights: weights,
-            label_type: PhantomData
-        }
-    }
-}
-
 fn select<T, I>(slice: &I, indices: &[usize]) -> Vec<T>
 where T: Copy, I: Data<T>
 {
@@ -230,7 +207,7 @@ where T: Copy, I: Data<T>
 }
 
 
-trait ScoreSortedDescending {
+pub trait ScoreSortedDescending {
     fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64;
     fn score_generic<P, B, W>(&self, labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> f64
     where P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64>
@@ -247,7 +224,7 @@ pub fn score_sorted_iterators<S, P, B, W>(
     weights: impl Iterator<Item = W> + Clone,
 ) -> f64
 where S: ScoreSortedDescending, P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64> {
-    let mut zipped = predictions.zip(labels.zip(weights));
+    let zipped = predictions.zip(labels.zip(weights));
     return score.score_generic(zipped);
 }
 
@@ -514,7 +491,7 @@ impl ScoreSortedDescending for RocAucWithMaxFPR {
         let mut last_counted_fp = 0.0;
         let mut last_counted_tp = 0.0;
         let mut area_under_curve = 0.0;
-        let (false_positive_sum, true_positive_sum) = Self::get_positive_sum(labels_with_weights.clone().map(|(a, b)| b));
+        let (false_positive_sum, true_positive_sum) = Self::get_positive_sum(labels_with_weights.clone().map(|(_a, b)| b));
         let false_positive_cutoff = self.max_fpr * false_positive_sum;
         let mut lww = labels_with_weights.peekable();
         loop {
@@ -1460,7 +1437,6 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use approx::{assert_relative_eq};
     use super::*;
 
     #[test]
