@@ -394,22 +394,24 @@ impl ScoreSortedDescending for AveragePrecision {
         let mut positives = Positives::zero();
         let mut last_p = f64::NAN;
         let mut last_tps: f64 = 0.0;
-        
         let mut ap: f64 = 0.0;
-        
-        for (p, (label, w)) in labels_with_weights {
-            if last_p != last_p {
-                // TODO: Can we avoid this check here somehow?
-                //       Maybe we can do an iterator.next() step outside the loop to initialize last_p properly.
+
+        // TODO can we unify this preparation step with the loop?
+        match labels_with_weights.next() {
+            None => (), // TODO: Sohuld we return an error in this case?
+            Some((p, (label, w))) => {
+                positives.add(f64::from(label.get_value()), w);
                 last_p = p;
             }
+        }
+        
+        for (p, (label, w)) in labels_with_weights {
             if last_p != p {
                 ap += (positives.tps - last_tps) * positives.precision();
                 last_p = p;
                 last_tps = positives.tps;
             }
-            let l: bool = label.get_value();
-            positives.add(f64::from(l), w);
+            positives.add(f64::from(label.get_value()), w);
         }
 
         ap += (positives.tps - last_tps) * positives.precision();
