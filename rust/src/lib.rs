@@ -559,213 +559,10 @@ where P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64>
 }
 
 
-pub fn average_precision_on_descending_iterators<B: BinaryLabel, F: num::Float>(
-    labels_and_weights: impl Iterator<Item = (B, F)>
-) -> f64 {
-    let mut ap: f64 = 0.0;
-    let mut tps: f64 = 0.0;
-    let mut fps: f64 = 0.0;
-    for (label, weight) in labels_and_weights {
-        let w: f64 = weight.to_f64().unwrap();
-        let l: bool = label.get_value();
-        let tp = w * f64::from(l);
-        tps += tp;
-        fps += w - tp;
-        let ps = tps + fps;
-        let precision = tps / ps;
-        ap += tp * precision;
-    }
-    // Special case for tps == 0 following sklearn
-    // https://github.com/scikit-learn/scikit-learn/blob/5cce87176a530d2abea45b5a7e5a4d837c481749/sklearn/metrics/_ranking.py#L1032-L1039
-    // I.e. if tps is 0.0, there are no positive samples in labels: Either all labels are 0, or all weights (for positive labels) are 0
-    return if tps == 0.0 {
-        0.0
-    } else {
-        ap / tps
-    };
-}
-
-
-pub fn roc_auc_max_fpr<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, max_false_positive_rate: Option<f64>) -> f64
-where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W: Data<F>
-{
-    return roc_auc_with_order(labels, predictions, weights, None, max_false_positive_rate);
-}
-
-
-pub fn roc_auc_with_order<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Option<Order>, max_false_positive_rate: Option<f64>) -> f64
-where B: BinaryLabel, L: Data<B>, F: num::Float, P: SortableData<F> + Data<F>, W: Data<F>
-{
-    return match order {
-        Some(o) => roc_auc_on_sorted_labels(labels, predictions, weights, o, max_false_positive_rate),
-        None => {
-            let indices = predictions.argsort_unstable();
-            let sorted_labels = select(labels, &indices);
-            let sorted_predictions = select(predictions, &indices);
-            let roc_auc_score = match weights {
-                Some(w) => {
-                    let sorted_weights = select(w, &indices);
-                    roc_auc_on_sorted_labels(&sorted_labels, &sorted_predictions, Some(&sorted_weights), Order::DESCENDING, max_false_positive_rate)
-                },
-                None => {
-                    roc_auc_on_sorted_labels(&sorted_labels, &sorted_predictions, None::<&W>, Order::DESCENDING, max_false_positive_rate)
-                }
-            };
-            roc_auc_score
-        }
-    };
-}
-
-
-pub fn roc_auc_on_sorted_labels<B, L, F, P, W>(labels: &L, predictions: &P, weights: Option<&W>, order: Order, max_false_positive_rate: Option<f64>) -> f64
-where B: BinaryLabel, L: Data<B>, F: num::Float, P: Data<F>, W: Data<F> {
-    return match max_false_positive_rate {
-        None => {
-            let mut lit = labels.get_iterator();
-            let mut pit = predictions.get_iterator().map(|p| p.to_f64().unwrap());
-            match weights {
-                Some(w) => roc_auc_on_sorted_iterator(&mut lit, &mut pit, &mut w.get_iterator().map(|x| x.to_f64().unwrap()), order),
-                None => roc_auc_on_sorted_iterator(&mut lit, &mut pit, &mut ConstWeight::<F>::one().get_iterator().map(|x| x.to_f64().unwrap()), order),
-            }
-        }
-        Some(max_fpr) => match weights {
-            Some(w) => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, w, order, max_fpr),
-            None => roc_auc_on_sorted_with_fp_cutoff(labels, predictions, &ConstWeight::<F>::one(), order, max_fpr),
-        }
-    };
-}
-
-
-pub fn roc_auc_on_sorted_iterator<B: BinaryLabel>(
-    labels: &mut impl DoubleEndedIterator<Item = B>,
-    predictions: &mut impl DoubleEndedIterator<Item = f64>,
-    weights: &mut impl DoubleEndedIterator<Item = f64>,
-    order: Order
-) -> f64 {
-    return match order {
-        Order::ASCENDING => roc_auc_on_descending_iterator(&mut labels.rev(), &mut predictions.rev(), &mut weights.rev()),
-        Order::DESCENDING => roc_auc_on_descending_iterator(labels, predictions, weights)
-    }
-}
-
-
-pub fn roc_auc_on_descending_iterator<B: BinaryLabel>(
-    labels: &mut impl Iterator<Item = B>,
-    predictions: &mut impl Iterator<Item = f64>,
-    weights: &mut impl Iterator<Item = f64>
-) -> f64 {
-    let mut false_positives: f64 = 0.0;
-    let mut true_positives: f64 = 0.0;
-    let mut last_counted_fp = 0.0;
-    let mut last_counted_tp = 0.0;
-    let mut area_under_curve = 0.0;
-    let mut zipped = labels.zip(predictions).zip(weights).peekable();
-    loop {
-        match zipped.next() {
-            None => break,
-            Some(actual) => {
-                let l = f64::from(actual.0.0.get_value());
-                let w = actual.1;
-                let wl = l * w;
-                true_positives += wl;
-                false_positives += w - wl;
-                if zipped.peek().map(|x| x.0.1 != actual.0.1).unwrap_or(true) {
-                    area_under_curve += area_under_line_segment(last_counted_fp, false_positives, last_counted_tp, true_positives);
-                    last_counted_fp = false_positives;
-                    last_counted_tp = true_positives;
-                }
-            }
-        };
-    }
-    return area_under_curve / (true_positives * false_positives);
-}
-
-
 fn area_under_line_segment(x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     let dx = x1 - x0;
     let dy = y1 - y0;
     return dx * y0 + dy * dx * 0.5;
-}
-
-
-fn get_positive_sum<B: BinaryLabel>(
-    labels: impl Iterator<Item = B>,
-    weights: impl Iterator<Item = f64>
-) -> (f64, f64) {
-    let mut false_positives = 0f64;
-    let mut true_positives = 0f64;
-    for (label, weight) in labels.zip(weights) {
-        let lw = weight * f64::from(label.get_value());
-        false_positives += weight - lw;
-        true_positives += lw;
-    }
-    return (false_positives, true_positives);
-}
-
-
-pub fn roc_auc_on_sorted_with_fp_cutoff<B, L, F, P, W>(labels: &L, predictions: &P, weights: &W, order: Order, max_false_positive_rate: f64) -> f64
-where B: BinaryLabel, L: Data<B>, F: num::Float, P: Data<F>, W: Data<F> {
-    // TODO validate max_fpr
-    let (fps, tps) = get_positive_sum(labels.get_iterator(), weights.get_iterator().map(|x| x.to_f64().unwrap()));
-    let mut l_it = labels.get_iterator();
-    let mut p_it = predictions.get_iterator().map(|p| p.to_f64().unwrap());
-    let mut w_it = weights.get_iterator().map(|w| w.to_f64().unwrap());
-    return match order {
-        Order::ASCENDING => roc_auc_on_descending_iterator_with_fp_cutoff(&mut l_it.rev(), &mut p_it.rev(), &mut w_it.rev(), fps, tps, max_false_positive_rate),
-        Order::DESCENDING => roc_auc_on_descending_iterator_with_fp_cutoff(&mut l_it, &mut p_it, &mut w_it, fps, tps, max_false_positive_rate)
-    };
-}
-    
-
-fn roc_auc_on_descending_iterator_with_fp_cutoff<B: BinaryLabel>(
-    labels: &mut impl Iterator<Item = B>,
-    predictions: &mut impl Iterator<Item = f64>,
-    weights: &mut impl Iterator<Item = f64>,
-    false_positive_sum: f64,
-    true_positive_sum: f64,
-    max_false_positive_rate: f64
-) -> f64 {
-    let mut false_positives: f64 = 0.0;
-    let mut true_positives: f64 = 0.0;
-    let mut last_counted_fp = 0.0;
-    let mut last_counted_tp = 0.0;
-    let mut area_under_curve = 0.0;
-    let mut zipped = labels.zip(predictions).zip(weights).peekable();
-    let false_positive_cutoff = max_false_positive_rate * false_positive_sum;
-    loop {
-        match zipped.next() {
-            None => break,
-            Some(actual) => {
-                let l = f64::from(actual.0.0.get_value());
-                let w = actual.1;
-                let wl = l * w;
-                let next_tp = true_positives + wl;
-                let next_fp = false_positives + (w - wl);
-                let is_above_max = next_fp > false_positive_cutoff;
-                if is_above_max {
-                    let dx = next_fp  - false_positives;
-                    let dy = next_tp - true_positives;
-                    true_positives += dy * false_positive_cutoff / dx;
-                    false_positives = false_positive_cutoff;
-                } else {
-                    true_positives = next_tp;
-                    false_positives = next_fp;
-                }
-                if zipped.peek().map(|x| x.0.1 != actual.0.1).unwrap_or(true) || is_above_max {
-                    area_under_curve += area_under_line_segment(last_counted_fp, false_positives, last_counted_tp, true_positives);
-                    last_counted_fp = false_positives;
-                    last_counted_tp = true_positives;
-                }
-                if is_above_max {
-                    break;
-                }                
-            }
-        };
-    }
-    let normalized_area_under_curve = area_under_curve / (true_positive_sum * false_positive_sum);
-    let min_area = 0.5 * max_false_positive_rate * max_false_positive_rate;
-    let max_area = max_false_positive_rate;
-    return 0.5 * (1.0 + (normalized_area_under_curve - min_area) / (max_area - min_area));
 }
 
 
@@ -1497,7 +1294,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = roc_auc_with_order(&labels, &predictions, Some(&weights), Some(Order::DESCENDING), None);
+        let actual = roc_auc(&predictions, &labels, Some(&weights), Some(Order::DESCENDING), None);
         assert_eq!(actual, 0.75);
     }
 
@@ -1505,7 +1302,7 @@ mod tests {
     fn test_roc_auc_double() {
         let labels: [u8; 8] = [1, 0, 1, 0, 1, 0, 1, 0];
         let predictions: [f64; 8] = [0.8, 0.4, 0.35, 0.1, 0.8, 0.4, 0.35, 0.1];
-        let actual = roc_auc_with_order(&labels, &predictions, None::<&[f64; 8]>, None, None);
+        let actual = roc_auc(&predictions, &labels, None::<&[f64; 8]>, None, None);
         assert_eq!(actual, 0.75);
     }
 
