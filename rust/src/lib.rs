@@ -441,30 +441,45 @@ impl RocAuc {
 
 
 impl ScoreSortedDescending for RocAuc {
-    fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
-        let mut false_positives: f64 = 0.0;
-        let mut true_positives: f64 = 0.0;
+    fn score<B: BinaryLabel>(&self, mut labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
+        let mut positives = Positives::zero();
+        let mut last_p = f64::NAN;
         let mut last_counted_fp = 0.0;
         let mut last_counted_tp = 0.0;
         let mut area_under_curve = 0.0;
-        let mut lww = labels_with_weights.peekable();
-        loop {
-            match lww.next() {
-                None => break,
-                Some((p, (l_binary, w))) => {
-                    let l = f64::from(l_binary.get_value());
-                    let wl = l * w;
-                    true_positives += wl;
-                    false_positives += w - wl;
-                    if lww.peek().map(|x| x.0 != p).unwrap_or(true) {
-                        area_under_curve += area_under_line_segment(last_counted_fp, false_positives, last_counted_tp, true_positives);
-                        last_counted_fp = false_positives;
-                        last_counted_tp = true_positives;
-                    }
-                }
-            };
+
+        
+
+        // TODO can we unify this preparation step with the loop?
+        match labels_with_weights.next() {
+            None => (), // TODO: Sohuld we return an error in this case?
+            Some((p, (label, w))) => {
+                positives.add(f64::from(label.get_value()), w);
+                last_p = p;
+            }
         }
-        return area_under_curve / (true_positives * false_positives);
+        
+        for (p, (label, w)) in labels_with_weights {
+            if last_p != p {
+                area_under_curve += area_under_line_segment(
+                    last_counted_fp,
+                    positives.fps,
+                    last_counted_tp,
+                    positives.tps,
+                );
+                last_counted_fp = positives.fps;
+                last_counted_tp = positives.tps;
+                last_p = p;
+            }
+            positives.add(f64::from(label.get_value()), w);
+        }
+        area_under_curve += area_under_line_segment(
+            last_counted_fp,
+            positives.fps,
+            last_counted_tp,
+            positives.tps,
+        );
+        return area_under_curve / (positives.tps * positives.fps);
     }
 }
 
@@ -1507,6 +1522,31 @@ mod tests {
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
         let actual = roc_auc_with_order(&labels, &predictions, Some(&weights), Some(Order::DESCENDING), None);
+        assert_eq!(actual, 0.75);
+    }
+
+    #[test]
+    fn test_roc_auc_double() {
+        let labels: [u8; 8] = [1, 0, 1, 0, 1, 0, 1, 0];
+        let predictions: [f64; 8] = [0.8, 0.4, 0.35, 0.1, 0.8, 0.4, 0.35, 0.1];
+        let actual = roc_auc_with_order(&labels, &predictions, None::<&[f64; 8]>, None, None);
+        assert_eq!(actual, 0.75);
+    }
+
+    #[test]
+    fn test_roc_sorted_pair() {
+        let labels: [u8; 4] = [1, 0, 1, 0];
+        let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
+        let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
+        let actual = score_two_sorted_samples(
+            RocAuc::new(),
+            predictions.iter().cloned(),
+            labels.iter().cloned(),
+            weights.iter().cloned(),
+            predictions.iter().cloned(),
+            labels.iter().cloned(),
+            weights.iter().cloned()
+        );
         assert_eq!(actual, 0.75);
     }
 }
