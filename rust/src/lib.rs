@@ -333,7 +333,7 @@ impl AveragePrecision {
 }
 
 
-#[derive(Debug)]
+#[derive(Clone,Copy,Debug)]
 struct Positives {
     tps: f64,
     fps: f64,
@@ -425,8 +425,6 @@ impl ScoreSortedDescending for RocAuc {
         let mut last_counted_tp = 0.0;
         let mut area_under_curve = 0.0;
 
-        
-
         // TODO can we unify this preparation step with the loop?
         match labels_with_weights.next() {
             None => (), // TODO: Sohuld we return an error in this case?
@@ -462,6 +460,9 @@ impl ScoreSortedDescending for RocAuc {
 
 
 struct RocAucWithMaxFPR {
+    // TODO: Can we have a single implementation for this and RocAuc?
+    //       This would add an unncessary check to RocAuc but performance
+    //       penalty may be negligible.
     max_fpr: f64,
 }
 
@@ -485,44 +486,60 @@ impl RocAucWithMaxFPR {
 
 
 impl ScoreSortedDescending for RocAucWithMaxFPR {
-    fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
-        let mut false_positives: f64 = 0.0;
-        let mut true_positives: f64 = 0.0;
+    fn score<B: BinaryLabel>(&self, mut labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
+        let (false_positive_sum, true_positive_sum) = Self::get_positive_sum(labels_with_weights.clone().map(|(_a, b)| b));
+        let false_positive_cutoff = self.max_fpr * false_positive_sum;
+
+        let mut positives = Positives::zero();
+        let mut last_p = f64::NAN;
         let mut last_counted_fp = 0.0;
         let mut last_counted_tp = 0.0;
         let mut area_under_curve = 0.0;
-        let (false_positive_sum, true_positive_sum) = Self::get_positive_sum(labels_with_weights.clone().map(|(_a, b)| b));
-        let false_positive_cutoff = self.max_fpr * false_positive_sum;
-        let mut lww = labels_with_weights.peekable();
-        loop {
-            match lww.next() {
-                None => break,
-                Some((p, (l_binary, w))) => {
-                    let l = f64::from(l_binary.get_value());
-                    let wl = l * w;
-                    let next_tp = true_positives + wl;
-                    let next_fp = false_positives + (w - wl);
-                    let is_above_max = next_fp > false_positive_cutoff;
-                    if is_above_max {
-                        let dx = next_fp  - false_positives;
-                        let dy = next_tp - true_positives;
-                        true_positives += dy * false_positive_cutoff / dx;
-                        false_positives = false_positive_cutoff;
-                    } else {
-                        true_positives = next_tp;
-                        false_positives = next_fp;
-                    }
-                    if lww.peek().map(|x| x.0 != p).unwrap_or(true) || is_above_max {
-                        area_under_curve += area_under_line_segment(last_counted_fp, false_positives, last_counted_tp, true_positives);
-                        last_counted_fp = false_positives;
-                        last_counted_tp = true_positives;
-                    }
-                    if is_above_max {
-                        break;
-                    }                
-                }
-            };
+
+        // TODO can we unify this preparation step with the loop?
+        match labels_with_weights.next() {
+            None => (), // TODO: Sohuld we return an error in this case?
+            Some((p, (label, w))) => {
+                positives.add(f64::from(label.get_value()), w);
+                last_p = p;
+            }
         }
+        
+        for (p, (label, w)) in labels_with_weights {
+            if last_p != p {
+                area_under_curve += area_under_line_segment(
+                    last_counted_fp,
+                    positives.fps,
+                    last_counted_tp,
+                    positives.tps,
+                );
+                last_counted_fp = positives.fps;
+                last_counted_tp = positives.tps;
+                last_p = p;
+            }
+            let mut next_pos = positives.clone();
+            next_pos.add(f64::from(label.get_value()), w);
+            if next_pos.fps > false_positive_cutoff {
+                let dx = next_pos.fps - positives.fps;
+                let dy = next_pos.tps - positives.tps;
+                positives = Positives::new(
+                    positives.tps + dy * false_positive_cutoff / dx,
+                    false_positive_cutoff,
+                );
+                break;
+            }
+            else {
+                positives = next_pos;
+            }
+        }
+
+        area_under_curve += area_under_line_segment(
+            last_counted_fp,
+            positives.fps,
+            last_counted_tp,
+            positives.tps,
+        );
+        
         let normalized_area_under_curve = area_under_curve / (true_positive_sum * false_positive_sum);
         let min_area = 0.5 * self.max_fpr * self.max_fpr;
         let max_area = self.max_fpr;
@@ -1321,5 +1338,39 @@ mod tests {
             weights.iter().cloned()
         );
         assert_eq!(actual, 0.75);
+    }
+
+    #[test]
+    fn test_roc_auc_max_fpr() {
+        let labels: [u8; 4] = [1, 0, 1, 0];
+        let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
+        let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
+        let actual = roc_auc(&predictions, &labels, Some(&weights), Some(Order::DESCENDING), Some(0.1));
+        assert_eq!(actual, 0.7368421052631579);
+    }
+
+    #[test]
+    fn test_roc_auc_max_fpr_double() {
+        let labels: [u8; 8] = [1, 0, 1, 0, 1, 0, 1, 0];
+        let predictions: [f64; 8] = [0.8, 0.4, 0.35, 0.1, 0.8, 0.4, 0.35, 0.1];
+        let actual = roc_auc(&predictions, &labels, None::<&[f64; 8]>, None, Some(0.1));
+        assert_eq!(actual, 0.7368421052631579);
+    }
+
+    #[test]
+    fn test_roc_auc_max_fpr_sorted_pair() {
+        let labels: [u8; 4] = [1, 0, 1, 0];
+        let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
+        let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
+        let actual = score_two_sorted_samples(
+            RocAucWithMaxFPR::new(0.1),
+            predictions.iter().cloned(),
+            labels.iter().cloned(),
+            weights.iter().cloned(),
+            predictions.iter().cloned(),
+            labels.iter().cloned(),
+            weights.iter().cloned()
+        );
+        assert_eq!(actual, 0.7368421052631579);
     }
 }
