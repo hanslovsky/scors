@@ -5,7 +5,7 @@ from typing import Callable
 import numpy as np
 
 from . import _scors as scors
-from ._scors import *
+from ._scors import loo_cossim
 
 __doc__ = scors.__doc__
 _logger = logging.getLogger("scors")
@@ -24,6 +24,8 @@ _supported_score_types = (
     ("float32", "f32"),
     ("float64", "f64"),
 )
+
+Order = scors.Order
 
 
 def _lookup_supported_type(dtype: str | np.dtype, supported_type_dict: dict[str, str]) -> str:
@@ -61,9 +63,9 @@ def _from_generic_score(scors_name: str) -> Callable[[np.ndarray, np.ndarray, np
     
 def _loo_cossim_many(data: np.ndarray):
     if data.dtype == np.float32:
-        return loo_cossim_many_f32(data)
+        return scors.loo_cossim_many_f32(data)
     if data.dtype == np.float64:
-        return loo_cossim_many_f64(data)
+        return scors.loo_cossim_many_f64(data)
     raise TypeError(f"Only float32 and float64 data supported, but found {data.dtype}")
 
 
@@ -114,9 +116,11 @@ def average_precision_on_two_sorted_samples(
     
 
 __all__ = sorted([
+    "Order",
     "average_precision",
     "average_precision_on_two_sorted_samples",
+    "loo_cossim",
     "loo_cossim_many",
     "roc_auc",
-    *scors.__all__
+    "scors",
 ])
