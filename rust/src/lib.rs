@@ -663,13 +663,11 @@ fn py_order_as_order(order: PyOrder) -> Order {
     }
 }
 
-trait PyScoreGeneric<S, B, F>: Ungil + Sync
-where S: ScoreSortedDescending, B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
-{
+trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
 
     fn get_score(&self) -> S;
 
-    fn score_py<'py>(
+    fn score_py<'py, B, F>(
         &self,
         py: Python<'py>,
         labels: PyReadonlyArray1<'py, B>,
@@ -677,6 +675,7 @@ where S: ScoreSortedDescending, B: BinaryLabel + Element, F: num::Float + Elemen
         weights: Option<PyReadonlyArray1<'py, F>>,
         order: Option<PyOrder>,
     ) -> f64
+    where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
     {
         let labels = labels.as_array();
         let predictions = predictions.as_array();
@@ -695,22 +694,22 @@ where S: ScoreSortedDescending, B: BinaryLabel + Element, F: num::Float + Elemen
         return score;
     }
 
-    fn score_two_sorted_samples_py_generic<'py>(
+    fn score_two_sorted_samples_py_generic<'py, B, F, B1, B2, F1, F2>(
         &self,
         py: Python<'py>,
-        labels1: PyReadonlyArray1<'py, B>,
-        predictions1: PyReadonlyArray1<'py, F>,
-        weights1: Option<PyReadonlyArray1<'py, F>>,
-        labels2: PyReadonlyArray1<'py, B>,
-        predictions2: PyReadonlyArray1<'py, F>,
-        weights2: Option<PyReadonlyArray1<'py, F>>,
+        labels1: PyReadonlyArray1<'py, B1>,
+        predictions1: PyReadonlyArray1<'py, F1>,
+        weights1: Option<PyReadonlyArray1<'py, F1>>,
+        labels2: PyReadonlyArray1<'py, B1>,
+        predictions2: PyReadonlyArray1<'py, F2>,
+        weights2: Option<PyReadonlyArray1<'py, F2>>,
     ) -> f64
-    where S: ScoreSortedDescending + Ungil + Sync, B: BinaryLabel + Clone + PartialOrd + Element, F: num::Float + Element + Into<f64>
+    where B: BinaryLabel + PartialOrd, F: num::Float + TotalOrder + Into<f64>, B1: Element + Into<B> + Clone, B2: Element + Into<B> + Clone, F1: Element + Into<F> + Clone, F2: Element + Into<F> + Clone
     {
-        let l1 = labels1.as_array().into_iter().cloned();
-        let l2 = labels2.as_array().into_iter().cloned();
-        let p1 = predictions1.as_array().into_iter().cloned();
-        let p2 = predictions2.as_array().into_iter().cloned();
+        let l1 = labels1.as_array().into_iter().cloned().map(|l| l.into());
+        let l2 = labels2.as_array().into_iter().cloned().map(|l| l.into());
+        let p1 = predictions1.as_array().into_iter().cloned().map(|f| f.into());
+        let p2 = predictions2.as_array().into_iter().cloned().map(|f| f.into());
 
 
         return match (weights1, weights2) {
@@ -720,20 +719,20 @@ where S: ScoreSortedDescending, B: BinaryLabel + Element, F: num::Float + Elemen
                 })
             }
             (Some(w1), None) => {
-                let w1i = w1.as_array().into_iter().cloned();
+                let w1i = w1.as_array().into_iter().cloned().map(|w| w.into());
                 py.allow_threads(move || {
                     score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, repeat(F::one()))
                 })
             }
             (None, Some(w2)) => {
-                let w2i = w2.as_array().into_iter().cloned();
+                let w2i = w2.as_array().into_iter().cloned().map(|w| w.into());
                 py.allow_threads(move || {
                     score_two_sorted_samples(self.get_score(), p1, l1, repeat(F::one()), p2, l2, w2i)
                 })
             }
             (Some(w1), Some(w2)) =>  {
-                let w1i = w1.as_array().into_iter().cloned();
-                let w2i = w2.as_array().into_iter().cloned();
+                let w1i = w1.as_array().into_iter().cloned().map(|w| w.into());
+                let w2i = w2.as_array().into_iter().cloned().map(|w| w.into());
                 py.allow_threads(move || {
                     score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, w2i)
                 })
@@ -752,9 +751,7 @@ impl AveragePrecisionPyGeneric {
     }
 }
 
-impl <B, F> PyScoreGeneric<AveragePrecision, B, F> for AveragePrecisionPyGeneric
-where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
-{
+impl PyScoreGeneric<AveragePrecision> for AveragePrecisionPyGeneric {
     fn get_score(&self) -> AveragePrecision {
         return AveragePrecision::new();
     }
@@ -770,9 +767,7 @@ impl RocAucPyGeneric {
     }
 }
 
-impl <B, F> PyScoreGeneric<RocAucWithOptionalMaxFPR, B, F> for RocAucPyGeneric
-where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
-{
+impl PyScoreGeneric<RocAucWithOptionalMaxFPR> for RocAucPyGeneric {
     fn get_score(&self) -> RocAucWithOptionalMaxFPR {
         return RocAucWithOptionalMaxFPR::new(self.max_fpr);
     }
@@ -828,49 +823,49 @@ macro_rules! roc_auc_py {
 
 
 macro_rules! average_precision_on_two_sorted_samples_py {
-    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
+    ($fname: ident, $pyname:literal, $lt:ty, $pt:ty, $lt1:ty, $pt1:ty, $lt2:ty, $pt2:ty) => {
         #[pyfunction(name = $pyname)]
         #[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2, *))]
         pub fn $fname<'py>(
             py: Python<'py>,
-            labels1: PyReadonlyArray1<'py, $label_type>,
-            predictions1: PyReadonlyArray1<'py, $prediction_type>,
-            weights1: Option<PyReadonlyArray1<'py, $prediction_type>>,
-            labels2: PyReadonlyArray1<'py, $label_type>,
-            predictions2: PyReadonlyArray1<'py, $prediction_type>,
-            weights2: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            labels1: PyReadonlyArray1<'py, $lt1>,
+            predictions1: PyReadonlyArray1<'py, $pt1>,
+            weights1: Option<PyReadonlyArray1<'py, $pt1>>,
+            labels2: PyReadonlyArray1<'py, $lt2>,
+            predictions2: PyReadonlyArray1<'py, $pt2>,
+            weights2: Option<PyReadonlyArray1<'py, $pt2>>,
         ) -> f64
         {
-            return AveragePrecisionPyGeneric::new().score_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
+            return AveragePrecisionPyGeneric::new().score_two_sorted_samples_py_generic::<$lt, $pt, $lt1, $lt2, $pt1, $pt2>(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
         }
     };
-    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
-        average_precision_on_two_sorted_samples_py!($fname, $pyname, $label_type, $prediction_type);
+    ($fname: ident, $pyname:literal, $lt:ty, $pt:ty, $lt1:ty, $pt1:ty, $lt2:ty, $pt2:ty, $py_module:ident) => {
+        average_precision_on_two_sorted_samples_py!($fname, $pyname, $lt, $pt, $lt1, $pt1, $lt2, $pt2);
         $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
     };
 }
 
 
 macro_rules! roc_auc_on_two_sorted_samples_py {
-    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
+    ($fname: ident, $pyname:literal, $lt:ty, $pt:ty, $lt1:ty, $pt1:ty, $lt2:ty, $pt2:ty) => {
         #[pyfunction(name = $pyname)]
         #[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2, *, max_fpr=None))]
         pub fn $fname<'py>(
             py: Python<'py>,
-            labels1: PyReadonlyArray1<'py, $label_type>,
-            predictions1: PyReadonlyArray1<'py, $prediction_type>,
-            weights1: Option<PyReadonlyArray1<'py, $prediction_type>>,
-            labels2: PyReadonlyArray1<'py, $label_type>,
-            predictions2: PyReadonlyArray1<'py, $prediction_type>,
-            weights2: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            labels1: PyReadonlyArray1<'py, $lt1>,
+            predictions1: PyReadonlyArray1<'py, $pt1>,
+            weights1: Option<PyReadonlyArray1<'py, $pt1>>,
+            labels2: PyReadonlyArray1<'py, $lt2>,
+            predictions2: PyReadonlyArray1<'py, $pt2>,
+            weights2: Option<PyReadonlyArray1<'py, $pt2>>,
             max_fpr: Option<f64>,
         ) -> f64
         {
-            return RocAucPyGeneric::new(max_fpr).score_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
+            return RocAucPyGeneric::new(max_fpr).score_two_sorted_samples_py_generic::<$lt, $pt, $lt1, $lt2, $pt1, $pt2>(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
         }
     };
-    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
-        average_precision_on_two_sorted_samples_py!($fname, $pyname, $label_type, $prediction_type);
+    ($fname: ident, $pyname:literal, $lt:ty, $pt:ty, $lt1:ty, $pt1:ty, $lt2:ty, $pt2:ty, $py_module:ident) => {
+        average_precision_on_two_sorted_samples_py!($fname, $pyname, $lt, $pt, $lt1, $pt1, $lt2, $pt2);
         $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
     };
 }
@@ -999,43 +994,43 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     roc_auc_py!(roc_auc_u32_f64, "roc_auc_u32_f64", u32, f64, m);
     roc_auc_py!(roc_auc_u64_f64, "roc_auc_u64_f64", u64, f64, m);
 
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f32, "average_precision_on_two_sorted_samples_bool_f32", bool, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f32, "average_precision_on_two_sorted_samples_i8_f32", i8, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f32, "average_precision_on_two_sorted_samples_i16_f32", i16, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f32, "average_precision_on_two_sorted_samples_i32_f32", i32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f32, "average_precision_on_two_sorted_samples_i64_f32", i64, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f32, "average_precision_on_two_sorted_samples_u8_f32", u8, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f32, "average_precision_on_two_sorted_samples_u16_f32", u16, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f32, "average_precision_on_two_sorted_samples_u32_f32", u32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f32, "average_precision_on_two_sorted_samples_u64_f32", u64, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f64, "average_precision_on_two_sorted_samples_bool_f64", bool, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f64, "average_precision_on_two_sorted_samples_i8_f64", i8, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f64, "average_precision_on_two_sorted_samples_i16_f64", i16, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f64, "average_precision_on_two_sorted_samples_i32_f64", i32, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f64, "average_precision_on_two_sorted_samples_i64_f64", i64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f64, "average_precision_on_two_sorted_samples_u8_f64", u8, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f64, "average_precision_on_two_sorted_samples_u16_f64", u16, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f64, "average_precision_on_two_sorted_samples_u32_f64", u32, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f64, "average_precision_on_two_sorted_samples_u64_f64", u64, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f32, "average_precision_on_two_sorted_samples_bool_f32", bool, f32, bool, f32, bool, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f32, "average_precision_on_two_sorted_samples_i8_f32", i8, f32, i8, f32, i8, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f32, "average_precision_on_two_sorted_samples_i16_f32", i16, f32, i16, f32, i16, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f32, "average_precision_on_two_sorted_samples_i32_f32", i32, f32, i32, f32, i32, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f32, "average_precision_on_two_sorted_samples_i64_f32", i64, f32, i64, f32, i64, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f32, "average_precision_on_two_sorted_samples_u8_f32", u8, f32, u8, f32, u8, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f32, "average_precision_on_two_sorted_samples_u16_f32", u16, f32, u16, f32, u16, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f32, "average_precision_on_two_sorted_samples_u32_f32", u32, f32, u32, f32, u32, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f32, "average_precision_on_two_sorted_samples_u64_f32", u64, f32, u64, f32, u64, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f64, "average_precision_on_two_sorted_samples_bool_f64", bool, f64, bool, f64, bool, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f64, "average_precision_on_two_sorted_samples_i8_f64", i8, f64, i8, f64, i8, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f64, "average_precision_on_two_sorted_samples_i16_f64", i16, f64, i16, f64, i16, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f64, "average_precision_on_two_sorted_samples_i32_f64", i32, f64, i16, f64, i16, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f64, "average_precision_on_two_sorted_samples_i64_f64", i64, f64, i64, f64, i64, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f64, "average_precision_on_two_sorted_samples_u8_f64", u8, f64, u8, f64, u8, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f64, "average_precision_on_two_sorted_samples_u16_f64", u16, f64, u16, f64, u16, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f64, "average_precision_on_two_sorted_samples_u32_f64", u32, f64, u32, f64, u32, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f64, "average_precision_on_two_sorted_samples_u64_f64", u64, f64, u64, f64, u64, f64, m);
 
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f32, "roc_auc_on_two_sorted_samples_bool_f32", bool, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f32, "roc_auc_on_two_sorted_samples_i8_f32", i8, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f32, "roc_auc_on_two_sorted_samples_i16_f32", i16, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f32, "roc_auc_on_two_sorted_samples_i32_f32", i32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f32, "roc_auc_on_two_sorted_samples_i64_f32", i64, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f32, "roc_auc_on_two_sorted_samples_u8_f32", u8, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f32, "roc_auc_on_two_sorted_samples_u16_f32", u16, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f32, "roc_auc_on_two_sorted_samples_u32_f32", u32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f32, "roc_auc_on_two_sorted_samples_u64_f32", u64, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f64, "roc_auc_on_two_sorted_samples_bool_f64", bool, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f64, "roc_auc_on_two_sorted_samples_i8_f64", i8, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f64, "roc_auc_on_two_sorted_samples_i16_f64", i16, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f64, "roc_auc_on_two_sorted_samples_i32_f64", i32, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f64, "roc_auc_on_two_sorted_samples_i64_f64", i64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f64, "roc_auc_on_two_sorted_samples_u8_f64", u8, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f64, "roc_auc_on_two_sorted_samples_u16_f64", u16, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f64, "roc_auc_on_two_sorted_samples_u32_f64", u32, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f64, "roc_auc_on_two_sorted_samples_u64_f64", u64, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f32, "roc_auc_on_two_sorted_samples_bool_f32", bool, f32, bool, f32, bool, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f32, "roc_auc_on_two_sorted_samples_i8_f32", i8, f32, i8, f32, i8, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f32, "roc_auc_on_two_sorted_samples_i16_f32", i16, f32, i16, f32, i16, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f32, "roc_auc_on_two_sorted_samples_i32_f32", i32, f32, i32, f32, i32, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f32, "roc_auc_on_two_sorted_samples_i64_f32", i64, f32, i64, f32, i64, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f32, "roc_auc_on_two_sorted_samples_u8_f32", u8, f32, u8, f32, u8, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f32, "roc_auc_on_two_sorted_samples_u16_f32", u16, f32, u16, f32, u16, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f32, "roc_auc_on_two_sorted_samples_u32_f32", u32, f32, u32, f32, u32, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f32, "roc_auc_on_two_sorted_samples_u64_f32", u64, f32, u64, f32, u64, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f64, "roc_auc_on_two_sorted_samples_bool_f64", bool, f64, bool, f64, bool, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f64, "roc_auc_on_two_sorted_samples_i8_f64", i8, f64, i8, f64, i8, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f64, "roc_auc_on_two_sorted_samples_i16_f64", i16, f64, i16, f64, i16, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f64, "roc_auc_on_two_sorted_samples_i32_f64", i32, f64, i16, f64, i16, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f64, "roc_auc_on_two_sorted_samples_i64_f64", i64, f64, i64, f64, i64, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f64, "roc_auc_on_two_sorted_samples_u8_f64", u8, f64, u8, f64, u8, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f64, "roc_auc_on_two_sorted_samples_u16_f64", u16, f64, u16, f64, u16, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f64, "roc_auc_on_two_sorted_samples_u32_f64", u32, f64, u32, f64, u32, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f64, "roc_auc_on_two_sorted_samples_u64_f64", u64, f64, u64, f64, u64, f64, m);
 
     m.add_function(wrap_pyfunction!(loo_cossim_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f64, m)?).unwrap();
