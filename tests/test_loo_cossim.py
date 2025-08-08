@@ -96,14 +96,14 @@ def test_loo_cossim_wrong_shape(ndim, dtype):
 def test_loo_cossim_many_f32_wrong_type(dtype):
     data = np.ones((1, 2, 3))
     with pytest.raises(TypeError, match="Only float32 data supported"):
-        scors.loo_cossim_many_f32(np.require(data, dtype=dtype))
+        scors.scors.loo_cossim_many_f32(np.require(data, dtype=dtype))
 
         
 @pytest.mark.parametrize("dtype", ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "bool", "float32"])
 def test_loo_cossim_many_f64_wrong_type(dtype):
     data = np.ones((1, 2, 3))
     with pytest.raises(TypeError, match="Only float64 data supported"):
-        scors.loo_cossim_many_f64(np.require(data, dtype=dtype))
+        scors.scors.loo_cossim_many_f64(np.require(data, dtype=dtype))
 
         
 @pytest.mark.parametrize("dtype", ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "bool"])
@@ -116,8 +116,8 @@ def test_loo_cossim_many_wrong_type(dtype):
 @pytest.mark.parametrize("ndim", [0, 1, 2, 4, 7])
 @pytest.mark.parametrize(
     ("f", "dtype"),
-    [(scors.loo_cossim_many_f32, "float32"),
-     (scors.loo_cossim_many_f64, "float64")],
+    [(scors.scors.loo_cossim_many_f32, "float32"),
+     (scors.scors.loo_cossim_many_f64, "float64")],
     ids=["float32", "float64"]
 )
 def test_loo_cossim_many_typed_wrong_shape(ndim, f, dtype):

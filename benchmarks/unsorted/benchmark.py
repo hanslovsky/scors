@@ -36,7 +36,7 @@ if __name__ == "__main__":
     predictions = rng.random(max(ns), dtype=np.float64)
     weights = rng.random(max(ns), dtype=np.float64)
 
-    benchmark_data_fn = "unsorted.parquet"
+    benchmark_data_fn = "statistics.parquet"
 
     try:
         df = pd.read_parquet(benchmark_data_fn)
@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
 
         df = pd.DataFrame.from_records(records)
-        df.to_parquet("unsorted.parquet", index=False)
+        df.to_parquet(benchmark_data_fn, index=False)
 
     for (metric, use_weights), gdf in df.groupby(["metric", "weights"]):
         use_weights = bool(use_weights)
@@ -80,10 +80,10 @@ if __name__ == "__main__":
             ax2.set_xscale("log")
         ax1.legend()
         ax2.legend()
-        ax1.set_ylabel("Mean Runtime [s]")
-        ax1.set_xlabel("Sample Size")
+        ax1.set_ylabel("Log Mean Runtime [s]")
+        ax1.set_xlabel("Log Sample Size")
         ax2.set_ylabel("Mean Runtime / Mean Runtime sklearn")
-        ax2.set_xlabel("Sample Size")
+        ax2.set_xlabel("Log Sample Size")
 
     plt.show()
     
