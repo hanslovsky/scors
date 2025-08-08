@@ -460,9 +460,6 @@ impl ScoreSortedDescending for RocAuc {
 
 
 struct RocAucWithMaxFPR {
-    // TODO: Can we have a single implementation for this and RocAuc?
-    //       This would add an unncessary check to RocAuc but performance
-    //       penalty may be negligible.
     max_fpr: f64,
 }
 
@@ -548,6 +545,30 @@ impl ScoreSortedDescending for RocAucWithMaxFPR {
 }
 
 
+struct RocAucWithOptionalMaxFPR {
+    // TODO: Can we have a single implementation for this and RocAuc?
+    //       This would add an unncessary check to RocAuc but performance
+    //       penalty may be negligible.
+    max_fpr: Option<f64>,
+}
+
+impl RocAucWithOptionalMaxFPR {
+    fn new(max_fpr: Option<f64>) -> Self {
+        return Self { max_fpr };
+    }
+}
+
+
+impl ScoreSortedDescending for RocAucWithOptionalMaxFPR {
+    fn score<B: BinaryLabel>(&self, labels_with_weights: impl Iterator<Item = (f64, (B, f64))> + Clone) -> f64 {
+        return match self.max_fpr {
+            Some(mfpr) => RocAucWithMaxFPR::new(mfpr).score(labels_with_weights),
+            None => RocAuc::new().score(labels_with_weights),
+        }
+    }
+}
+
+
 pub fn average_precision<P, B, W>(
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
@@ -569,10 +590,7 @@ pub fn roc_auc<P, B, W>(
 ) -> f64
 where P: num::Float + Into<f64>, B: BinaryLabel, W: num::Float + Into<f64>
 {
-    return match max_fpr {
-        Some(mfpr) => score_maybe_sorted_sample(RocAucWithMaxFPR::new(mfpr), predictions, labels, weights, order),
-        None => score_maybe_sorted_sample(RocAuc::new(), predictions, labels, weights, order),
-    };
+    return score_maybe_sorted_sample(RocAucWithOptionalMaxFPR::new(max_fpr), predictions, labels, weights, order);
 }
 
 
@@ -645,9 +663,11 @@ fn py_order_as_order(order: PyOrder) -> Order {
     }
 }
 
-trait PyScoreGeneric<B, F>: Ungil + Sync
-where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
+trait PyScoreGeneric<S, B, F>: Ungil + Sync
+where S: ScoreSortedDescending, B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
 {
+
+    fn get_score(&self) -> S;
 
     fn score_py<'py>(
         &self,
@@ -665,24 +685,61 @@ where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder
             Some(weight) => {
                 let w = weight.as_array();
                 py.allow_threads(move || {
-                    self.score(labels, predictions, Some(w), order)
+                    score_maybe_sorted_sample(self.get_score(), &predictions, &labels, Some(&w), order)
                 })
             },
             None => py.allow_threads(move || {
-                self.score(labels, predictions, None::<Vec<F>>, order)
+                score_maybe_sorted_sample(self.get_score(), &predictions, &labels, None::<&Vec<F>>, order)
             })
         };
         return score;
     }
 
-    fn score<L: Data<B>, P: SortableData<F> + Data<F>, W: Data<F>>(
+    fn score_two_sorted_samples_py_generic<'py>(
         &self,
-        labels: L,
-        predictions: P,
-        weights: Option<W>,
-        order: Option<Order>
-    ) -> f64;
+        py: Python<'py>,
+        labels1: PyReadonlyArray1<'py, B>,
+        predictions1: PyReadonlyArray1<'py, F>,
+        weights1: Option<PyReadonlyArray1<'py, F>>,
+        labels2: PyReadonlyArray1<'py, B>,
+        predictions2: PyReadonlyArray1<'py, F>,
+        weights2: Option<PyReadonlyArray1<'py, F>>,
+    ) -> f64
+    where S: ScoreSortedDescending + Ungil + Sync, B: BinaryLabel + Clone + PartialOrd + Element, F: num::Float + Element + Into<f64>
+    {
+        let l1 = labels1.as_array().into_iter().cloned();
+        let l2 = labels2.as_array().into_iter().cloned();
+        let p1 = predictions1.as_array().into_iter().cloned();
+        let p2 = predictions2.as_array().into_iter().cloned();
 
+
+        return match (weights1, weights2) {
+            (None, None) => {
+                py.allow_threads(move || {
+                    score_two_sorted_samples(self.get_score(), p1, l1, repeat(F::one()), p2, l2, repeat(F::one()))
+                })
+            }
+            (Some(w1), None) => {
+                let w1i = w1.as_array().into_iter().cloned();
+                py.allow_threads(move || {
+                    score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, repeat(F::one()))
+                })
+            }
+            (None, Some(w2)) => {
+                let w2i = w2.as_array().into_iter().cloned();
+                py.allow_threads(move || {
+                    score_two_sorted_samples(self.get_score(), p1, l1, repeat(F::one()), p2, l2, w2i)
+                })
+            }
+            (Some(w1), Some(w2)) =>  {
+                let w1i = w1.as_array().into_iter().cloned();
+                let w2i = w2.as_array().into_iter().cloned();
+                py.allow_threads(move || {
+                    score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, w2i)
+                })
+            }
+        };
+    }
 }
 
 struct AveragePrecisionPyGeneric {
@@ -695,17 +752,11 @@ impl AveragePrecisionPyGeneric {
     }
 }
 
-impl <B, F> PyScoreGeneric<B, F> for AveragePrecisionPyGeneric
+impl <B, F> PyScoreGeneric<AveragePrecision, B, F> for AveragePrecisionPyGeneric
 where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
 {
-    fn score<L: Data<B>, P: SortableData<F> + Data<F>, W: Data<F>>(
-        &self,
-        labels: L,
-        predictions: P,
-        weights: Option<W>,
-        order: Option<Order>
-    ) -> f64 {
-        return average_precision(&predictions, &labels, weights.as_ref(), order);
+    fn get_score(&self) -> AveragePrecision {
+        return AveragePrecision::new();
     }
 }
 
@@ -719,17 +770,11 @@ impl RocAucPyGeneric {
     }
 }
 
-impl <B, F> PyScoreGeneric<B, F> for RocAucPyGeneric
+impl <B, F> PyScoreGeneric<RocAucWithOptionalMaxFPR, B, F> for RocAucPyGeneric
 where B: BinaryLabel + Element, F: num::Float + Element + TotalOrder + Into<f64>
 {
-    fn score<L: Data<B>, P: SortableData<F> + Data<F>, W: Data<F>>(
-        &self,
-        labels: L,
-        predictions: P,
-        weights: Option<W>,
-        order: Option<Order>
-    ) -> f64 {
-        return roc_auc(&predictions, &labels, weights.as_ref(), order, self.max_fpr);
+    fn get_score(&self) -> RocAucWithOptionalMaxFPR {
+        return RocAucWithOptionalMaxFPR::new(self.max_fpr);
     }
 }
 
@@ -782,320 +827,52 @@ macro_rules! roc_auc_py {
 }
 
 
-pub fn average_precision_on_two_sorted_samples_py_generic<'py, B, F>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, B>,
-    predictions1: PyReadonlyArray1<'py, F>,
-    weights1: Option<PyReadonlyArray1<'py, F>>,
-    labels2: PyReadonlyArray1<'py, B>,
-    predictions2: PyReadonlyArray1<'py, F>,
-    weights2: Option<PyReadonlyArray1<'py, F>>,
-) -> f64
-where B: BinaryLabel + Clone + PartialOrd + Element, F: num::Float + Element
-{
-    let l1 = labels1.as_array().into_iter().cloned();
-    let l2 = labels2.as_array().into_iter().cloned();
-    let p1 = predictions1.as_array().into_iter().map(|f| f.to_f64().unwrap());
-    let p2 = predictions2.as_array().into_iter().map(|f| f.to_f64().unwrap());
-    let score = AveragePrecision::new();
-
-
-    return match (weights1, weights2) {
-        (None, None) => {
-            py.allow_threads(move || {
-                score_two_sorted_samples(score, p1, l1, repeat(1.0f64), p2, l2, repeat(1.0f64))
-            })
+macro_rules! average_precision_on_two_sorted_samples_py {
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
+        #[pyfunction(name = $pyname)]
+        #[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2, *))]
+        pub fn $fname<'py>(
+            py: Python<'py>,
+            labels1: PyReadonlyArray1<'py, $label_type>,
+            predictions1: PyReadonlyArray1<'py, $prediction_type>,
+            weights1: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            labels2: PyReadonlyArray1<'py, $label_type>,
+            predictions2: PyReadonlyArray1<'py, $prediction_type>,
+            weights2: Option<PyReadonlyArray1<'py, $prediction_type>>,
+        ) -> f64
+        {
+            return AveragePrecisionPyGeneric::new().score_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
         }
-        (Some(w1), None) => {
-            let w1i = w1.as_array().into_iter().map(|f| f.to_f64().unwrap());
-            py.allow_threads(move || {
-                score_two_sorted_samples(score, p1, l1, w1i, p2, l2, repeat(1.0f64))
-            })
-        }
-        (None, Some(w2)) => {
-            let w2i = w2.as_array().into_iter().map(|f| f.to_f64().unwrap());
-            py.allow_threads(move || {
-                score_two_sorted_samples(score, p1, l1, repeat(1.0f64), p2, l2, w2i)
-            })
-        }
-        (Some(w1), Some(w2)) =>  {
-            let w1i = w1.as_array().into_iter().map(|f| f.to_f64().unwrap());
-            let w2i = w2.as_array().into_iter().map(|f| f.to_f64().unwrap());
-            py.allow_threads(move || {
-                score_two_sorted_samples(score, p1, l1, w1i, p2, l2, w2i)
-            })
-        }
+    };
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
+        average_precision_on_two_sorted_samples_py!($fname, $pyname, $label_type, $prediction_type);
+        $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
     };
 }
 
 
-#[pyfunction(name = "average_precision_on_two_sorted_samples_bool_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_bool_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, bool>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, bool>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_i8_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_i8_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, i8>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, i8>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_i16_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_i16_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, i16>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, i16>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_i32_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_i32_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, i32>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, i32>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_i64_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_i64_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, i64>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, i64>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_u8_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_u8_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, u8>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, u8>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_u16_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_u16_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, u16>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, u16>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_u32_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_u32_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, u32>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, u32>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_u64_f32")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_u64_f32<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, u64>,
-    predictions1: PyReadonlyArray1<'py, f32>,
-    weights1: Option<PyReadonlyArray1<'py, f32>>,
-    labels2: PyReadonlyArray1<'py, u64>,
-    predictions2: PyReadonlyArray1<'py, f32>,
-    weights2: Option<PyReadonlyArray1<'py, f32>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_bool_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_bool_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, bool>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, bool>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_i8_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_i8_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, i8>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, i8>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_i16_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_i16_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, i16>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, i16>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_i32_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_i32_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, i32>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, i32>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_i64_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_i64_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, i64>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, i64>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_u8_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_u8_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, u8>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, u8>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_u16_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_u16_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, u16>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, u16>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_u32_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_u32_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, u32>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, u32>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
-}
-
-
-#[pyfunction(name = "average_precision_on_two_sorted_samples_u64_f64")]
-#[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2))]
-pub fn average_precision_on_two_sorted_samples_u64_f64<'py>(
-    py: Python<'py>,
-    labels1: PyReadonlyArray1<'py, u64>,
-    predictions1: PyReadonlyArray1<'py, f64>,
-    weights1: Option<PyReadonlyArray1<'py, f64>>,
-    labels2: PyReadonlyArray1<'py, u64>,
-    predictions2: PyReadonlyArray1<'py, f64>,
-    weights2: Option<PyReadonlyArray1<'py, f64>>,
-) -> f64 {
-    return average_precision_on_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
+macro_rules! roc_auc_on_two_sorted_samples_py {
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
+        #[pyfunction(name = $pyname)]
+        #[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2, *, max_fpr=None))]
+        pub fn $fname<'py>(
+            py: Python<'py>,
+            labels1: PyReadonlyArray1<'py, $label_type>,
+            predictions1: PyReadonlyArray1<'py, $prediction_type>,
+            weights1: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            labels2: PyReadonlyArray1<'py, $label_type>,
+            predictions2: PyReadonlyArray1<'py, $prediction_type>,
+            weights2: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            max_fpr: Option<f64>,
+        ) -> f64
+        {
+            return RocAucPyGeneric::new(max_fpr).score_two_sorted_samples_py_generic(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
+        }
+    };
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
+        average_precision_on_two_sorted_samples_py!($fname, $pyname, $label_type, $prediction_type);
+        $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
+    };
 }
 
 
@@ -1222,24 +999,43 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     roc_auc_py!(roc_auc_u32_f64, "roc_auc_u32_f64", u32, f64, m);
     roc_auc_py!(roc_auc_u64_f64, "roc_auc_u64_f64", u64, f64, m);
 
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_bool_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i8_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i16_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i32_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i64_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u8_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u16_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u32_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u64_f32, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_bool_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i8_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i16_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i32_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_i64_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u8_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u16_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u32_f64, m)?).unwrap();
-    m.add_function(wrap_pyfunction!(average_precision_on_two_sorted_samples_u64_f64, m)?).unwrap();
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f32, "average_precision_on_two_sorted_samples_bool_f32", bool, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f32, "average_precision_on_two_sorted_samples_i8_f32", i8, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f32, "average_precision_on_two_sorted_samples_i16_f32", i16, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f32, "average_precision_on_two_sorted_samples_i32_f32", i32, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f32, "average_precision_on_two_sorted_samples_i64_f32", i64, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f32, "average_precision_on_two_sorted_samples_u8_f32", u8, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f32, "average_precision_on_two_sorted_samples_u16_f32", u16, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f32, "average_precision_on_two_sorted_samples_u32_f32", u32, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f32, "average_precision_on_two_sorted_samples_u64_f32", u64, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f64, "average_precision_on_two_sorted_samples_bool_f64", bool, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f64, "average_precision_on_two_sorted_samples_i8_f64", i8, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f64, "average_precision_on_two_sorted_samples_i16_f64", i16, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f64, "average_precision_on_two_sorted_samples_i32_f64", i32, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f64, "average_precision_on_two_sorted_samples_i64_f64", i64, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f64, "average_precision_on_two_sorted_samples_u8_f64", u8, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f64, "average_precision_on_two_sorted_samples_u16_f64", u16, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f64, "average_precision_on_two_sorted_samples_u32_f64", u32, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f64, "average_precision_on_two_sorted_samples_u64_f64", u64, f64, m);
+
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f32, "roc_auc_on_two_sorted_samples_bool_f32", bool, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f32, "roc_auc_on_two_sorted_samples_i8_f32", i8, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f32, "roc_auc_on_two_sorted_samples_i16_f32", i16, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f32, "roc_auc_on_two_sorted_samples_i32_f32", i32, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f32, "roc_auc_on_two_sorted_samples_i64_f32", i64, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f32, "roc_auc_on_two_sorted_samples_u8_f32", u8, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f32, "roc_auc_on_two_sorted_samples_u16_f32", u16, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f32, "roc_auc_on_two_sorted_samples_u32_f32", u32, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f32, "roc_auc_on_two_sorted_samples_u64_f32", u64, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f64, "roc_auc_on_two_sorted_samples_bool_f64", bool, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f64, "roc_auc_on_two_sorted_samples_i8_f64", i8, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f64, "roc_auc_on_two_sorted_samples_i16_f64", i16, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f64, "roc_auc_on_two_sorted_samples_i32_f64", i32, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f64, "roc_auc_on_two_sorted_samples_i64_f64", i64, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f64, "roc_auc_on_two_sorted_samples_u8_f64", u8, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f64, "roc_auc_on_two_sorted_samples_u16_f64", u16, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f64, "roc_auc_on_two_sorted_samples_u32_f64", u32, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f64, "roc_auc_on_two_sorted_samples_u64_f64", u64, f64, m);
 
     m.add_function(wrap_pyfunction!(loo_cossim_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f64, m)?).unwrap();
