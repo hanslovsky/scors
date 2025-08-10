@@ -151,49 +151,49 @@ impl BinaryLabel for bool {
 
 impl BinaryLabel for u8 {
     fn get_value(&self) -> bool {
-        return (self & 1) == 1;
+        return (self & 1u8) == 1u8;
     }
 }
 
 impl BinaryLabel for u16 {
     fn get_value(&self) -> bool {
-        return (self & 1) == 1;
+        return (self & 1u16) == 1u16;
     }
 }
 
 impl BinaryLabel for u32 {
     fn get_value(&self) -> bool {
-        return (self & 1) == 1;
+        return (self & 1u32) == 1u32;
     }
 }
 
 impl BinaryLabel for u64 {
     fn get_value(&self) -> bool {
-        return (self & 1) == 1;
+        return (self & 1u64) == 1u64;
     }
 }
 
 impl BinaryLabel for i8 {
     fn get_value(&self) -> bool {
-        return (self & 1) == 1;
+        return (self & 1i8) == 1i8;
     }
 }
 
 impl BinaryLabel for i16 {
     fn get_value(&self) -> bool {
-        return (self & 1) == 1;
+        return (self & 1i16) == 1i16;
     }
 }
 
 impl BinaryLabel for i32 {
     fn get_value(&self) -> bool {
-        return (self & 1) == 1;
+        return (self & 1i32) == 1i32;
     }
 }
 
 impl BinaryLabel for i64 {
     fn get_value(&self) -> bool {
-        return (self & 1) == 1;
+        return (self & 1i64) == 1i64;
     }
 }
 
