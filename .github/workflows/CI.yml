@@ -60,7 +60,7 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
-          toolchain: nightly
+          rust-toolchain: nightly
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -99,7 +99,7 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
-          toolchain: nightly
+          rust-toolchain: nightly
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -153,7 +153,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          toolchain: nightly
+          rust-toolchain: nightly
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -187,7 +187,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          toolchain: nightly
+          rust-toolchain: nightly
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -207,7 +207,7 @@ jobs:
         with:
           command: sdist
           args: --out dist
-          toolchain: nightly
+          rust-toolchain: nightly
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
@@ -240,7 +240,7 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
-          toolchain: nightly
+          rust-toolchain: nightly
 
   release-crate:
     name: "Release Create"
@@ -258,7 +258,7 @@ jobs:
     - uses: actions/checkout@v3
     - uses: actions-rs/toolchain@v1
       with:
-          toolchain: stable
+          toolchain: nightly
           override: true
     - uses: katyo/publish-crates@v2
       with:
