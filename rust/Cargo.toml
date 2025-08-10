@@ -7,6 +7,7 @@ description = "Scores for binary classifier evaluation"
 readme = "../README.md"
 repository = "https://github.com/hanslovsky/scors"
 homepage = "https://github.com/hanslovsky/scors"
+rust-version = "1.88"
 
 
 [lib]
