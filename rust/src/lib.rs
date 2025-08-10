@@ -208,37 +208,43 @@ where T: Copy, I: Data<T>
     return selection;
 }
 
-pub trait Prediction = num::Float + AddAssign + From<bool> + From<f32>;
-pub trait Weight<P: Prediction> =  Into<P> + num::Float;
+pub trait ScoreAccumulator = num::Float + AddAssign + From<bool> + From<f32>;
+pub trait IntoScore<S: ScoreAccumulator> =  Into<S> + num::Float;
 
 
 
 pub trait ScoreSortedDescending {
-    fn score<P, B, W>(&self, labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> P
-    where P: Prediction, B: BinaryLabel, W: Weight<P>;
+    fn _score<S: ScoreAccumulator>(&self, labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S;
+    fn score<S, P, B, W>(&self, labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> S
+    where S: ScoreAccumulator, P: IntoScore<S>, B: BinaryLabel, W: IntoScore<S>
+    {
+        return self._score(
+            labels_with_weights.map(|(p, (b, w))| -> (S, (bool, S)) { (p.into(), (b.get_value(), w.into()))})
+        )
+    }
 }
 
 
-pub fn score_sorted_iterators<S, P, B, W>(
+pub fn score_sorted_iterators<S, SA, P, B, W>(
     score: S,
     predictions: impl Iterator<Item = P> + Clone,
     labels: impl Iterator<Item = B> + Clone,
     weights: impl Iterator<Item = W> + Clone,
-) -> P
-where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel, W: Weight<P> {
+) -> SA
+where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel, W: IntoScore<SA> {
     let zipped = predictions.zip(labels.zip(weights));
     return score.score(zipped);
 }
 
 
-pub fn score_sorted_sample<S, P, B, W>(
+pub fn score_sorted_sample<S, SA, P, B, W>(
     score: S,
     predictions: &impl Data<P>,
     labels: &impl Data<B>,
     weights: &impl Data<W>,
     order: Order,
-) -> P
-where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel, W: Weight<P> + Clone {
+) -> SA
+where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel, W: IntoScore<SA> + Clone {
     let p = predictions.get_iterator();
     let l = labels.get_iterator();
     let w = weights.get_iterator();
@@ -249,14 +255,14 @@ where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel, W: Weight<P> + Cl
 }
 
 
-pub fn score_maybe_sorted_sample<S, P, B, W>(
+pub fn score_maybe_sorted_sample<S, SA, P, B, W>(
     score: S,
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
     weights: Option<&impl Data<W>>,
     order: Option<Order>,
-) -> P
-where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel, W: Weight<P> + Clone
+) -> SA
+where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel, W: IntoScore<SA> + Clone
 {
     return match order {
         Some(o) => {
@@ -281,18 +287,19 @@ where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel, W: Weight<P> + Cl
 }
 
 
-pub fn score_sample<S, P, B, W>(
+pub fn score_sample<S, SA, P, B, W>(
     score: S,
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
     weights: Option<&impl Data<W>>,
-) -> P
-where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel, W: Weight<P> + Clone {
+) -> SA
+
+where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel, W: IntoScore<SA> + Clone {
     return score_maybe_sorted_sample(score, predictions, labels, weights, None);
 }
 
 
-pub fn score_two_sorted_samples<S, P, B, W>(
+pub fn score_two_sorted_samples<S, SA, P, B, W>(
     score: S,
     predictions1: impl Iterator<Item = P> + Clone,
     label1: impl Iterator<Item = B> + Clone,
@@ -300,8 +307,8 @@ pub fn score_two_sorted_samples<S, P, B, W>(
     predictions2: impl Iterator<Item = P> + Clone,
     label2: impl Iterator<Item = B> + Clone,
     weight2: impl Iterator<Item = W> + Clone,
-) -> P
-where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel + PartialOrd, W: Weight<P>
+) -> SA
+where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel + PartialOrd, W: IntoScore<SA>
 {
     return score_two_sorted_samples_zipped(
         score,
@@ -311,12 +318,12 @@ where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel + PartialOrd, W: W
 }
 
 
-pub fn score_two_sorted_samples_zipped<S, P, B, W>(
+pub fn score_two_sorted_samples_zipped<S, SA, P, B, W>(
     score: S,
     iter1: impl Iterator<Item = (P, (B, W))> + Clone,
     iter2: impl Iterator<Item = (P, (B, W))> + Clone,
-) -> P
-where S: ScoreSortedDescending, P: Prediction, B: BinaryLabel + PartialOrd, W: Weight<P>
+) -> SA
+where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel + PartialOrd, W: IntoScore<SA>
 {
     let combined_iter = combine::combine::CombineIterDescending::new(iter1, iter2);
     return score.score(combined_iter);
@@ -373,20 +380,18 @@ where P: num::Float + From<bool> + AddAssign
 
 
 impl ScoreSortedDescending for AveragePrecision {
-    fn score<P, B, W>(&self, mut labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> P
-    where P: Prediction, B: BinaryLabel, W: Weight<P>
+    fn _score<S: ScoreAccumulator>(&self, mut labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S
     {
-
-        let mut positives: Positives<P> = Positives::zero();
-        let mut last_p: P = f32::NAN.into();
-        let mut last_tps: P = P::zero();
-        let mut ap: P = P::zero();
+        let mut positives: Positives<S> = Positives::zero();
+        let mut last_p: S = f32::NAN.into();
+        let mut last_tps: S = S::zero();
+        let mut ap: S = S::zero();
 
         // TODO can we unify this preparation step with the loop?
         match labels_with_weights.next() {
             None => (), // TODO: Sohuld we return an error in this case?
             Some((p, (label, w))) => {
-                positives.add(label.get_value(), w.into());
+                positives.add(label, w);
                 last_p = p;
             }
         }
@@ -405,8 +410,8 @@ impl ScoreSortedDescending for AveragePrecision {
         // Special case for tps == 0 following sklearn
         // https://github.com/scikit-learn/scikit-learn/blob/5cce87176a530d2abea45b5a7e5a4d837c481749/sklearn/metrics/_ranking.py#L1032-L1039
         // I.e. if tps is 0.0, there are no positive samples in labels: Either all labels are 0, or all weights (for positive labels) are 0
-        return if positives.tps == P::zero() {
-            P::zero()
+        return if positives.tps == S::zero() {
+            S::zero()
         } else {
             ap / positives.tps
         };
@@ -427,20 +432,19 @@ impl RocAuc {
 
 
 impl ScoreSortedDescending for RocAuc {
-    fn score<P, B, W>(&self, mut labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> P
-    where P: Prediction, B: BinaryLabel, W: Weight<P>
+    fn _score<S: ScoreAccumulator>(&self, mut labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S
     {
-        let mut positives: Positives<P> = Positives::zero();
-        let mut last_p: P = f32::NAN.into();
-        let mut last_counted_fp = P::zero();
-        let mut last_counted_tp = P::zero();
-        let mut area_under_curve = P::zero();
+        let mut positives: Positives<S> = Positives::zero();
+        let mut last_p: S = f32::NAN.into();
+        let mut last_counted_fp = S::zero();
+        let mut last_counted_tp = S::zero();
+        let mut area_under_curve = S::zero();
 
         // TODO can we unify this preparation step with the loop?
         match labels_with_weights.next() {
             None => (), // TODO: Should we return an error in this case?
             Some((p, (label, w))) => {
-                positives.add(label.get_value(), w.into());
+                positives.add(label, w);
                 last_p = p;
             }
         }
@@ -457,7 +461,7 @@ impl ScoreSortedDescending for RocAuc {
                 last_counted_tp = positives.tps;
                 last_p = p;
             }
-            positives.add(label.get_value(), w.into());
+            positives.add(label, w);
         }
         area_under_curve += area_under_line_segment(
             last_counted_fp,
@@ -493,24 +497,23 @@ impl RocAucWithMaxFPR {
 
 
 impl ScoreSortedDescending for RocAucWithMaxFPR {
-    fn score<P, B, W>(&self, mut labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> P
-    where P: Prediction, B: BinaryLabel, W: Weight<P>
+    fn _score<S: ScoreAccumulator>(&self, mut labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S
     {
-        let total_positives = Self::get_positive_sum(labels_with_weights.clone().map(|(_a, (b, c))| -> (B, P) {(b, c.into())}));
-        let max_fpr: P = self.max_fpr.into();
+        let total_positives = Self::get_positive_sum(labels_with_weights.clone().map(|(_a, b)| b));
+        let max_fpr: S = self.max_fpr.into();
         let false_positive_cutoff = max_fpr * total_positives.fps;
 
-        let mut positives: Positives<P> = Positives::zero();
-        let mut last_p: P = f32::NAN.into();
-        let mut last_counted_fp = P::zero();
-        let mut last_counted_tp = P::zero();
-        let mut area_under_curve = P::zero();
+        let mut positives: Positives<S> = Positives::zero();
+        let mut last_p: S = f32::NAN.into();
+        let mut last_counted_fp = S::zero();
+        let mut last_counted_tp = S::zero();
+        let mut area_under_curve = S::zero();
 
         // TODO can we unify this preparation step with the loop?
         match labels_with_weights.next() {
             None => (), // TODO: Should we return an error in this case?
             Some((p, (label, w))) => {
-                positives.add(label.get_value(), w.into());
+                positives.add(label, w);
                 last_p = p;
             }
         }
@@ -528,7 +531,7 @@ impl ScoreSortedDescending for RocAucWithMaxFPR {
                 last_p = p;
             }
             let mut next_pos = positives.clone();
-            next_pos.add(label.get_value(), w.into());
+            next_pos.add(label, w);
             if next_pos.fps > false_positive_cutoff {
                 let dx = next_pos.fps - positives.fps;
                 let dy = next_pos.tps - positives.tps;
@@ -551,10 +554,10 @@ impl ScoreSortedDescending for RocAucWithMaxFPR {
         );
         
         let normalized_area_under_curve = area_under_curve / (total_positives.tps * total_positives.fps);
-        let one_half: P = 0.5f32.into(); 
+        let one_half: S = 0.5f32.into(); 
         let min_area = one_half * max_fpr * max_fpr;
         let max_area = max_fpr;
-        return one_half * (P::one() + (normalized_area_under_curve - min_area) / (max_area - min_area));
+        return one_half * (S::one() + (normalized_area_under_curve - min_area) / (max_area - min_area));
     }
 }
 
@@ -574,8 +577,7 @@ impl RocAucWithOptionalMaxFPR {
 
 
 impl ScoreSortedDescending for RocAucWithOptionalMaxFPR {
-    fn score<P, B, W>(&self, labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> P 
-    where P: Prediction, B: BinaryLabel, W: Weight<P>
+    fn _score<S: ScoreAccumulator>(&self, labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S
     {
         return match self.max_fpr {
             Some(mfpr) => RocAucWithMaxFPR::new(mfpr).score(labels_with_weights),
@@ -585,26 +587,26 @@ impl ScoreSortedDescending for RocAucWithOptionalMaxFPR {
 }
 
 
-pub fn average_precision<P, B, W>(
+pub fn average_precision<S, P, B, W>(
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
     weights: Option<&impl Data<W>>,
     order: Option<Order>,
-) -> P
-where P: Prediction, B: BinaryLabel, W: Weight<P> + Clone
+) -> S
+where S: ScoreAccumulator, P: IntoScore<S>, B: BinaryLabel, W: IntoScore<S> + Clone
 {
     return score_maybe_sorted_sample(AveragePrecision::new(), predictions, labels, weights, order);
 }
 
 
-pub fn roc_auc<P, B, W>(
+pub fn roc_auc<S, P, B, W>(
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
     weights: Option<&impl Data<W>>,
     order: Option<Order>,
     max_fpr: Option<f32>,
-) -> P
-where P: Prediction, B: BinaryLabel, W: Weight<P> + Clone
+) -> S
+where S: ScoreAccumulator, P: IntoScore<S>, B: BinaryLabel, W: IntoScore<S> + Clone
 {
     return score_maybe_sorted_sample(RocAucWithOptionalMaxFPR::new(max_fpr), predictions, labels, weights, order);
 }
@@ -694,7 +696,7 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
         weights: Option<PyReadonlyArray1<'py, W>>,
         order: Option<PyOrder>,
     ) -> P
-    where P: Prediction + Element + TotalOrder, B: BinaryLabel + Element, W: Weight<P> + Element
+    where P: ScoreAccumulator + Element + TotalOrder, B: BinaryLabel + Element, W: IntoScore<P> + Element
     {
         let labels = labels.as_array();
         let predictions = predictions.as_array();
@@ -723,7 +725,7 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
         predictions2: PyReadonlyArray1<'py, F2>,
         weights2: Option<PyReadonlyArray1<'py, W2>>,
     ) -> F
-    where B: BinaryLabel + PartialOrd, F: Prediction + TotalOrder + Ungil, W: Weight<F>, B1: Element + Into<B> + Clone, B2: Element + Into<B> + Clone, F1: Element + Into<F> + Clone, F2: Element + Into<F> + Clone, W1: Element + Into<W> + Clone, W2: Element + Into<W> + Clone
+    where B: BinaryLabel + PartialOrd, F: ScoreAccumulator + TotalOrder + Ungil, W: IntoScore<F>, B1: Element + Into<B> + Clone, B2: Element + Into<B> + Clone, F1: Element + Into<F> + Clone, F2: Element + Into<F> + Clone, W1: Element + Into<W> + Clone, W2: Element + Into<W> + Clone
     {
         let l1 = labels1.as_array().into_iter().cloned().map(|l| -> B { l.into() });
         let l2 = labels2.as_array().into_iter().cloned().map(|l| -> B { l.into() });
@@ -1068,7 +1070,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = score_sorted_sample(AveragePrecision::new(), &predictions, &labels, &weights, Order::DESCENDING);
+        let actual: f64 = score_sorted_sample(AveragePrecision::new(), &predictions, &labels, &weights, Order::DESCENDING);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1077,7 +1079,7 @@ mod tests {
         let labels: [u8; 8] = [1, 1, 0, 0, 1, 1, 0, 0];
         let predictions: [f64; 8] = [0.8, 0.8, 0.4, 0.4, 0.35, 0.35, 0.1, 0.1];
         let weights: [f64; 8] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-        let actual = score_sorted_sample(AveragePrecision::new(), &predictions, &labels, &weights, Order::DESCENDING);
+        let actual: f64 = score_sorted_sample(AveragePrecision::new(), &predictions, &labels, &weights, Order::DESCENDING);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1086,7 +1088,7 @@ mod tests {
         let labels: [u8; 4] = [0, 0, 1, 1];
         let predictions: [f64; 4] = [0.1, 0.4, 0.35, 0.8];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision(&predictions, &labels, Some(&weights), None);
+        let actual: f64 = average_precision(&predictions, &labels, Some(&weights), None);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1095,7 +1097,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = average_precision(&predictions, &labels, Some(&weights), Some(Order::DESCENDING));
+        let actual: f64 = average_precision(&predictions, &labels, Some(&weights), Some(Order::DESCENDING));
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1104,7 +1106,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = score_two_sorted_samples(
+        let actual: f64 = score_two_sorted_samples(
             AveragePrecision::new(),
             predictions.iter().cloned(),
             labels.iter().cloned(),
@@ -1121,7 +1123,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = roc_auc(&predictions, &labels, Some(&weights), Some(Order::DESCENDING), None);
+        let actual: f64 = roc_auc(&predictions, &labels, Some(&weights), Some(Order::DESCENDING), None);
         assert_eq!(actual, 0.75);
     }
 
@@ -1129,7 +1131,7 @@ mod tests {
     fn test_roc_auc_double() {
         let labels: [u8; 8] = [1, 0, 1, 0, 1, 0, 1, 0];
         let predictions: [f64; 8] = [0.8, 0.4, 0.35, 0.1, 0.8, 0.4, 0.35, 0.1];
-        let actual = roc_auc(&predictions, &labels, None::<&[f64; 8]>, None, None);
+        let actual: f64 = roc_auc(&predictions, &labels, None::<&[f64; 8]>, None, None);
         assert_eq!(actual, 0.75);
     }
 
@@ -1138,7 +1140,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = score_two_sorted_samples(
+        let actual: f64 = score_two_sorted_samples(
             RocAuc::new(),
             predictions.iter().cloned(),
             labels.iter().cloned(),
@@ -1155,7 +1157,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = roc_auc(&predictions, &labels, Some(&weights), Some(Order::DESCENDING), Some(0.25));
+        let actual: f64 = roc_auc(&predictions, &labels, Some(&weights), Some(Order::DESCENDING), Some(0.25));
         assert_eq!(actual, 0.7142857142857143);
     }
 
@@ -1163,7 +1165,7 @@ mod tests {
     fn test_roc_auc_max_fpr_double() {
         let labels: [u8; 8] = [1, 0, 1, 0, 1, 0, 1, 0];
         let predictions: [f64; 8] = [0.8, 0.4, 0.35, 0.1, 0.8, 0.4, 0.35, 0.1];
-        let actual = roc_auc(&predictions, &labels, None::<&[f64; 8]>, None, Some(0.25));
+        let actual: f64 = roc_auc(&predictions, &labels, None::<&[f64; 8]>, None, Some(0.25));
         assert_eq!(actual, 0.7142857142857143);
     }
 
@@ -1172,7 +1174,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual = score_two_sorted_samples(
+        let actual: f64 = score_two_sorted_samples(
             RocAucWithMaxFPR::new(0.25),
             predictions.iter().cloned(),
             labels.iter().cloned(),
