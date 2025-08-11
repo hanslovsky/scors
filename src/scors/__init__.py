@@ -155,5 +155,6 @@ __all__ = sorted([
     "loo_cossim",
     "loo_cossim_many",
     "roc_auc",
+    "roc_auc_on_two_sorted_samples",
     "scors",
 ])
