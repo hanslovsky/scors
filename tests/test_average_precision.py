@@ -1,13 +1,29 @@
 import time
+from dataclasses import dataclass
+from typing import Any, Callable, Literal
 
 import numba
 import numpy as np
 import pytest
 from numpy.typing import DTypeLike
 
-from sklearn.metrics import average_precision_score as ap_skl
+from sklearn.metrics import average_precision_score as ap_skl, roc_auc_score as roc_auc_skl
 
-from scors import Order, average_precision, average_precision_on_two_sorted_samples #_deprecated as average_precision_on_two_sorted_samples
+from scors import Order, average_precision, average_precision_on_two_sorted_samples, roc_auc, roc_auc_on_two_sorted_samples
+
+
+@dataclass
+class _ScoreFunc:
+    skl: Callable
+    scors: Callable
+    scors_two_samples: Callable
+
+
+_score_funcs = dict(
+    average_precision=_ScoreFunc(ap_skl, average_precision, average_precision_on_two_sorted_samples),
+    roc_auc=_ScoreFunc(roc_auc_skl, roc_auc, roc_auc_on_two_sorted_samples)
+)
+
 
 def test_sklearn_dosctring():
     # This example is taken from sklearn dosctring
@@ -51,7 +67,19 @@ def merge_by_scores_descending(
     return scores, true, weights
 
 
-def test_average_precision_on_two_sorted():
+
+@pytest.mark.parametrize(
+    ["score", "extra_kwargs"],
+    [
+        ("average_precision", None),
+        ("roc_auc", None),
+        ("roc_auc", dict(max_fpr=0.1)),
+    ],
+    ids=["ap", "roc_auc", "roc_auc_max-fpr"],
+)
+def test_score_two_sorted(score: Literal["average_precision", "roc_auc"], extra_kwargs: dict[str, Any] | None):
+    score_func = _score_funcs[score]
+    extra_kwargs = extra_kwargs or {}
     rng = np.random.default_rng(42)
     n = 10_000_001
     n1 =  9_000_002
@@ -65,7 +93,7 @@ def test_average_precision_on_two_sorted():
     
     t0 = time.perf_counter()
     # concatenation should be measured as part of the runtime
-    expected = ap_skl(y_true=np.concatenate(split(y_true)), y_score=np.concatenate(split(y_scores)), sample_weight=np.concatenate(split(weights)))
+    expected = score_func.skl(y_true=np.concatenate(split(y_true)), y_score=np.concatenate(split(y_scores)), sample_weight=np.concatenate(split(weights)), **extra_kwargs)
     dt_skl = time.perf_counter() - t0
     print()
     print(f"{dt_skl=}")
@@ -76,7 +104,7 @@ def test_average_precision_on_two_sorted():
     weights_sorted = weights[indices]
 
     t0 = time.perf_counter()
-    double_check_sorted = average_precision(y_true_sorted, y_scores_sorted, weights=weights_sorted, order=Order.DESCENDING)
+    double_check_sorted = score_func.scors(y_true_sorted, y_scores_sorted, weights=weights_sorted, order=Order.DESCENDING, **extra_kwargs)
     dt_desc = time.perf_counter() - t0
     assert np.isclose(double_check_sorted, expected)
     print(f"{dt_desc=} (lower bound to that does not consider time required for merging the two arrays)")
@@ -90,10 +118,11 @@ def test_average_precision_on_two_sorted():
     weights1, weights2 = weights[:n1][indices1], weights[n1:][indices2]
 
     t0 = time.perf_counter()
-    double_check = average_precision(
+    double_check = score_func.scors(
         np.concatenate([y_true1, y_true2]),
         np.concatenate([y_scores1, y_scores2]),
-        weights=np.concatenate([weights1, weights2])
+        weights=np.concatenate([weights1, weights2]),
+        **extra_kwargs,
     )
     dt_reg = time.perf_counter() - t0
     assert np.isclose(double_check, expected)
@@ -119,7 +148,7 @@ def test_average_precision_on_two_sorted():
     )
     dt_merge = time.perf_counter() - t0
     t0 = time.perf_counter()
-    check_merged = average_precision(y_true_merged, y_scores_merged, weights=weights_merged, order=Order.DESCENDING)
+    check_merged = score_func.scors(y_true_merged, y_scores_merged, weights=weights_merged, order=Order.DESCENDING, **extra_kwargs)
     dt_merged = time.perf_counter() - t0
     assert np.isclose(check_merged, expected)
     print(f"dt_sum={dt_merge+dt_merged} {dt_merge=} {dt_merged=}")
@@ -127,13 +156,14 @@ def test_average_precision_on_two_sorted():
     import logging
     logging.basicConfig(level="INFO")
     t0 = time.perf_counter()
-    actual = average_precision_on_two_sorted_samples(
+    actual = score_func.scors_two_samples(
         labels1=y_true1,
         predictions1=y_scores1,
         weights1=weights1,
         labels2=y_true2,
         predictions2=y_scores2,
         weights2=weights2,
+        **extra_kwargs
     )
     dt_act = time.perf_counter() - t0
     assert np.isclose(actual, expected)

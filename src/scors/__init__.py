@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
-from typing import Callable
+from functools import wraps
+from typing import Callable, Literal
 
 import numpy as np
 
@@ -83,6 +84,46 @@ def roc_auc(labels: np.ndarray, predictions: np.ndarray, weights: np.ndarray | N
     return _from_generic_score("roc_auc")(labels=labels, predictions=predictions, weights=weights, order=order, max_fpr=max_fpr)
 
 
+def _score_two_sorted_samples(name: Literal["average_precision", "roc_auc"]):
+    def decorator(func):
+        @wraps(func)
+        def _func(
+                labels1: np.ndarray,    
+                predictions1: np.ndarray,
+                weights1: np.ndarray | None,
+                labels2: np.ndarray,    
+                predictions2: np.ndarray,
+                weights2: np.ndarray | None,
+                *args,
+                **kwargs,
+        ):
+            l1, p1, w1 = labels1, predictions1, weights1
+            l2, p2, w2 = labels2, predictions2, weights2
+
+            if l1.dtype != l2.dtype:
+                raise TypeError(f"Label arrays must have the same dtype but found: {l1.dtype=} != {l2.dtype=}")
+
+            if p1.dtype != p2.dtype:
+                raise TypeError(f"Predictions arrays must have the same dtype but found: {p1.dtype=} != {p2.dtype=}")
+
+            if w1 is not None and w1.dtype != p1.dtype:
+                raise TypeError(f"Weight array must have the same dtype as predictions but found: {w1.dtype=} != {p1.dtype=}")
+
+            if w2 is not None and w2.dtype != p2.dtype:
+                raise TypeError(f"Weight array must have the same dtype as predictions but found: {w2.dtype=} != {p2.dtype=}")
+
+            l_dtype = _lookup_supported_label_type(l1.dtype)
+            p_dtype = _lookup_supported_score_type(p1.dtype)
+
+            func_name = f"{name}_on_two_sorted_samples_{l_dtype}_{p_dtype}"
+            _logger.info(f"{func_name=}")
+            func = getattr(scors, func_name)
+            return func(l1, p1, w1, l2, p2, w2, *args, **kwargs)
+        return _func
+    return decorator
+
+
+@_score_two_sorted_samples(name="average_precision")
 def average_precision_on_two_sorted_samples(
     labels1: np.ndarray,    
     predictions1: np.ndarray,
@@ -91,28 +132,20 @@ def average_precision_on_two_sorted_samples(
     predictions2: np.ndarray,
     weights2: np.ndarray | None,
 ):
-    l1, p1, w1 = labels1, predictions1, weights1
-    l2, p2, w2 = labels2, predictions2, weights2
+    raise NotImplementedError()
 
-    if l1.dtype != l2.dtype:
-        raise TypeError(f"Label arrays must have the same dtype but found: {l1.dtype=} != {l2.dtype=}")
 
-    if p1.dtype != p2.dtype:
-        raise TypeError(f"Predictions arrays must have the same dtype but found: {p1.dtype=} != {p2.dtype=}")
-
-    if w1 is not None and w1.dtype != p1.dtype:
-        raise TypeError(f"Weight array must have the same dtype as predictions but found: {w1.dtype=} != {p1.dtype=}")
-
-    if w2 is not None and w2.dtype != p2.dtype:
-        raise TypeError(f"Weight array must have the same dtype as predictions but found: {w2.dtype=} != {p2.dtype=}")
-
-    l_dtype = _lookup_supported_label_type(l1.dtype)
-    p_dtype = _lookup_supported_score_type(p1.dtype)
-
-    func_name = f"average_precision_on_two_sorted_samples_{l_dtype}_{p_dtype}"
-    _logger.info(f"{func_name=}")
-    func = getattr(scors, func_name)
-    return func(l1, p1, w1, l2, p2, w2)
+@_score_two_sorted_samples(name="roc_auc")
+def roc_auc_on_two_sorted_samples(
+    labels1: np.ndarray,    
+    predictions1: np.ndarray,
+    weights1: np.ndarray | None,
+    labels2: np.ndarray,    
+    predictions2: np.ndarray,
+    weights2: np.ndarray | None,
+    max_fpr: float | None = None,
+):
+    raise NotImplementedError()
     
 
 __all__ = sorted([
