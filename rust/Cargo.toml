@@ -14,10 +14,10 @@ name = "_scors"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23.5", features = ["extension-module"] }
-ndarray = "0.16.1"
+pyo3 = { version = "0.28", features = ["extension-module"] }
+ndarray = "0.17"
 num = "0.4.3"
-numpy = "0.23.0"
+numpy = "0.28"
 
 [dev-dependencies]
 approx = "0.5.1"
