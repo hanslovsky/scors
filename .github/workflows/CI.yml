@@ -48,23 +48,29 @@ jobs:
             target: s390x
           - runner: ubuntu-22.04
             target: ppc64le
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
+        include:
+          - python-version: "3.15"
+            experimental: true
+      fail-fast: false
+    continue-on-error: ${{ matrix.experimental == true }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: 3.x
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --out dist -i python${{ matrix.python-version }}
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: auto
-          rust-toolchain: nightly
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.platform.target }}
+          name: wheels-linux-${{ matrix.platform.target }}-${{ matrix.python-version }}
           path: dist
       - name: pytest
         if: ${{ startsWith(matrix.platform.target, 'x86_64') }}
@@ -99,7 +105,6 @@ jobs:
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
           manylinux: musllinux_1_2
-          rust-toolchain: nightly
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -153,7 +158,6 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          rust-toolchain: nightly
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -187,7 +191,6 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: --release --out dist --find-interpreter
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          rust-toolchain: nightly
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
@@ -207,7 +210,6 @@ jobs:
         with:
           command: sdist
           args: --out dist
-          rust-toolchain: nightly
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
@@ -240,7 +242,6 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
-          rust-toolchain: nightly
 
   release-crate:
     name: "Release Create"

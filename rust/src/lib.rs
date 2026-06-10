@@ -1,5 +1,3 @@
-#![feature(trait_alias)]
-
 mod combine;
 
 use ndarray::{Array1,ArrayView,ArrayView2,ArrayView3,ArrayViewMut1,Ix1};
@@ -208,8 +206,11 @@ where T: Copy, I: Data<T>
     return selection;
 }
 
-pub trait ScoreAccumulator = num::Float + AddAssign + From<bool> + From<f32>;
-pub trait IntoScore<S: ScoreAccumulator> =  Into<S> + num::Float;
+pub trait ScoreAccumulator: num::Float + AddAssign + From<bool> + From<f32> {}
+impl<T: num::Float + AddAssign + From<bool> + From<f32>> ScoreAccumulator for T {}
+
+pub trait IntoScore<S: ScoreAccumulator>: Into<S> + num::Float {}
+impl<S: ScoreAccumulator, T: Into<S> + num::Float> IntoScore<S> for T {}
 
 
 
@@ -670,7 +671,7 @@ pub fn loo_cossim_many<F: num::Float + AddAssign>(mat: &ArrayView3<'_, F>) -> Ar
 
 
 // Python bindings
-#[pyclass(eq, eq_int, name="Order")]
+#[pyclass(eq, eq_int, from_py_object, name="Order")]
 #[derive(Clone, Copy, PartialEq)]
 pub enum PyOrder {
     ASCENDING,
@@ -704,11 +705,11 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
         let score = match weights {
             Some(weight) => {
                 let w = weight.as_array();
-                py.allow_threads(move || {
+                py.detach(move || {
                     score_maybe_sorted_sample(self.get_score(), &predictions, &labels, Some(&w), order)
                 })
             },
-            None => py.allow_threads(move || {
+            None => py.detach(move || {
                 score_maybe_sorted_sample(self.get_score(), &predictions, &labels, None::<&Vec<W>>, order)
             })
         };
@@ -735,26 +736,26 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
 
         return match (weights1, weights2) {
             (None, None) => {
-                py.allow_threads(move || {
+                py.detach(move || {
                     score_two_sorted_samples(self.get_score(), p1, l1, repeat(W::one()), p2, l2, repeat(W::one()))
                 })
             }
             (Some(w1), None) => {
                 let w1i = w1.as_array().into_iter().cloned().map(|w| -> W { w.into() });
-                py.allow_threads(move || {
+                py.detach(move || {
                     score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, repeat(W::one()))
                 })
             }
             (None, Some(w2)) => {
                 let w2i = w2.as_array().into_iter().cloned().map(|w| -> W { w.into() });
-                py.allow_threads(move || {
+                py.detach(move || {
                     score_two_sorted_samples(self.get_score(), p1, l1, repeat(W::one()), p2, l2, w2i)
                 })
             }
             (Some(w1), Some(w2)) =>  {
                 let w1i = w1.as_array().into_iter().cloned().map(|w| -> W { w.into() });
                 let w2i = w2.as_array().into_iter().cloned().map(|w| -> W { w.into() });
-                py.allow_threads(move || {
+                py.detach(move || {
                     score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, w2i)
                 })
             }
@@ -904,17 +905,17 @@ pub fn loo_cossim_py<'py>(
 
     let dt = data.dtype();
     if dt.is_equiv_to(&dtype::<f32>(py)) {
-        let typed_data = data.downcast::<PyArray2<f32>>().unwrap().readonly();
+        let typed_data = data.cast::<PyArray2<f32>>().unwrap().readonly();
         let array = typed_data.as_array();
-        let score = py.allow_threads(move || {
+        let score = py.detach(move || {
             loo_cossim_single(&array)
         });
         return Ok(score as f64);
     }
     if dt.is_equiv_to(&dtype::<f64>(py)) {
-        let typed_data = data.downcast::<PyArray2<f64>>().unwrap().readonly();
+        let typed_data = data.cast::<PyArray2<f64>>().unwrap().readonly();
         let array = typed_data.as_array();
-        let score = py.allow_threads(move || {
+        let score = py.detach(move || {
             loo_cossim_single(&array)
         });
         return Ok(score);
@@ -929,9 +930,9 @@ pub fn loo_cossim_many_generic_py<'py, F: num::Float + AddAssign + Element>(
     if data.ndim() != 3 {
         return Err(PyTypeError::new_err(format!("Expected 3-dimensional array for data (outer(?) x samples x features) but found {} dimenisons.", data.ndim())));
     }
-    let typed_data = data.downcast::<PyArray3<F>>().unwrap().readonly();
+    let typed_data = data.cast::<PyArray3<F>>().unwrap().readonly();
     let array = typed_data.as_array();
-    let score = py.allow_threads(move || {
+    let score = py.detach(move || {
         loo_cossim_many(&array)
     });
     // TODO how can we return this generically without making a copy at the end?
@@ -953,7 +954,7 @@ pub fn loo_cossim_many_py_f64<'py>(
     if !dt.is_equiv_to(&dtype::<f64>(py)) {
         return Err(PyTypeError::new_err(format!("Only float64 data supported, but found {}", dt)));
     }
-    let typed_data = data.downcast::<PyArrayDyn<f64>>().unwrap();
+    let typed_data = data.cast::<PyArrayDyn<f64>>().unwrap();
     return loo_cossim_many_generic_py(py, typed_data);
 }
 
@@ -971,7 +972,7 @@ pub fn loo_cossim_many_py_f32<'py>(
     if !dt.is_equiv_to(&dtype::<f32>(py)) {
         return Err(PyTypeError::new_err(format!("Only float32 data supported, but found {}", dt)));
     }
-    let typed_data = data.downcast::<PyArrayDyn<f32>>().unwrap();
+    let typed_data = data.cast::<PyArrayDyn<f32>>().unwrap();
     return loo_cossim_many_generic_py(py, typed_data);
 }
 
