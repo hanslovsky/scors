@@ -8,9 +8,81 @@ use pyo3::Bound;
 use pyo3::exceptions::PyTypeError;
 use pyo3::marker::Ungil;
 use pyo3::prelude::*;
-use std::cmp::PartialOrd;
+use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
+use std::cmp::{Ordering,PartialOrd};
 use std::iter::{DoubleEndedIterator,repeat};
 use std::ops::AddAssign;
+
+/// Total ordering for sorting — floats use `total_cmp` (NaN sorts last),
+/// integers and bool use their natural `Ord`.
+pub trait TotalCmp: Copy + Send + Sync {
+    fn total_cmp(&self, other: &Self) -> Ordering;
+}
+
+macro_rules! impl_total_cmp_float {
+    ($t:ty) => {
+        impl TotalCmp for $t {
+            fn total_cmp(&self, other: &Self) -> Ordering { <$t>::total_cmp(self, other) }
+        }
+    };
+}
+macro_rules! impl_total_cmp_ord {
+    ($t:ty) => {
+        impl TotalCmp for $t {
+            fn total_cmp(&self, other: &Self) -> Ordering { self.cmp(other) }
+        }
+    };
+}
+
+impl_total_cmp_float!(f32);
+impl_total_cmp_float!(f64);
+impl_total_cmp_ord!(i8);
+impl_total_cmp_ord!(i16);
+impl_total_cmp_ord!(i32);
+impl_total_cmp_ord!(i64);
+impl_total_cmp_ord!(u8);
+impl_total_cmp_ord!(u16);
+impl_total_cmp_ord!(u32);
+impl_total_cmp_ord!(u64);
+impl_total_cmp_ord!(bool);
+
+/// Parallel-aware sort helper.  `None` → sequential; `Some(pool)` → Rayon pool.
+fn do_argsort<T, D>(data: &D, len: usize, stable: bool, pool: Option<&rayon::ThreadPool>) -> Vec<usize>
+where T: TotalCmp, D: Data<T> + Sync + ?Sized
+{
+    let mut indices: Vec<usize> = (0..len).collect();
+    let cmp = |i: &usize, k: &usize| data.get_at(*i).total_cmp(&data.get_at(*k));
+    match pool {
+        None => {
+            // No specific pool requested — use the global Rayon pool (parallel).
+            if stable { indices.par_sort_by(cmp); } else { indices.par_sort_unstable_by(cmp); }
+        }
+        Some(p) => {
+            if stable { p.install(|| indices.par_sort_by(cmp)); }
+            else      { p.install(|| indices.par_sort_unstable_by(cmp)); }
+        }
+    }
+    indices
+}
+
+fn do_sort<T: TotalCmp>(data: &mut [T], stable: bool, pool: Option<&rayon::ThreadPool>) {
+    let cmp = |a: &T, b: &T| a.total_cmp(b);
+    match pool {
+        None => {
+            // No specific pool requested — use the global Rayon pool (parallel).
+            if stable { data.par_sort_by(cmp); } else { data.par_sort_unstable_by(cmp); }
+        }
+        Some(p) => {
+            if stable { p.install(|| data.par_sort_by(cmp)); }
+            else      { p.install(|| data.par_sort_unstable_by(cmp)); }
+        }
+    }
+}
+
+fn build_pool(num_threads: Option<usize>) -> Option<rayon::ThreadPool> {
+    num_threads.map(|n| ThreadPoolBuilder::new().num_threads(n).build().unwrap())
+}
 
 // Convenience bound for types that can be widened into f64 scores/weights.
 pub trait IntoF64: Into<f64> + Copy + PartialOrd {}
@@ -62,8 +134,25 @@ pub trait Data<T: Clone> {
     fn get_at(&self, index: usize) -> T;
 }
 
-pub trait SortableData<T> {
-    fn argsort_unstable(&self) -> Vec<usize>;
+/// Marker trait: implementors of `Data<T>` that also support sorting.
+///
+/// The default `argsort_unstable` uses `get_at` for element access so no
+/// copy is needed regardless of memory layout.  Implementors that can provide
+/// a contiguous `&[T]` should override `as_contiguous_slice` to enable a
+/// faster slice-based comparator that LLVM can optimize more aggressively.
+pub trait SortableData<T: TotalCmp + Clone>: Data<T> + Sync {
+    /// Return a contiguous slice if the data is laid out contiguously in
+    /// memory, `None` otherwise.  The default returns `None`.
+    fn as_contiguous_slice(&self) -> Option<&[T]> { None }
+
+    fn argsort_unstable(&self, pool: Option<&rayon::ThreadPool>) -> Vec<usize> {
+        let len = self.get_iterator().count();
+        if let Some(slice) = self.as_contiguous_slice() {
+            do_argsort(slice, slice.len(), false, pool)
+        } else {
+            do_argsort(self, len, false, pool)
+        }
+    }
 }
 
 impl <T: Clone> Data<T> for Vec<T> {
@@ -75,11 +164,16 @@ impl <T: Clone> Data<T> for Vec<T> {
     }
 }
 
-impl<F: num::Float + TotalOrder> SortableData<F> for Vec<F> {
-    fn argsort_unstable(&self) -> Vec<usize> {
-        let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
-        indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
-        return indices;
+impl<F: TotalCmp + num::Float + TotalOrder + Clone + Sync> SortableData<F> for Vec<F> {
+    fn as_contiguous_slice(&self) -> Option<&[F]> { Some(self.as_slice()) }
+}
+
+impl <T: Clone> Data<T> for [T] {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> + Clone {
+        return self.iter().cloned();
+    }
+    fn get_at(&self, index: usize) -> T {
+        return self[index].clone();
     }
 }
 
@@ -92,12 +186,8 @@ impl <T: Clone> Data<T> for &[T] {
     }
 }
 
-impl<F: num::Float + TotalOrder> SortableData<F> for &[F] {
-    fn argsort_unstable(&self) -> Vec<usize> {
-        let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
-        indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
-        return indices;
-    }
+impl<F: TotalCmp + num::Float + TotalOrder + Clone + Sync> SortableData<F> for &[F] {
+    fn as_contiguous_slice(&self) -> Option<&[F]> { Some(self) }
 }
 
 impl <T: Clone, const N: usize> Data<T> for [T; N] {
@@ -109,12 +199,8 @@ impl <T: Clone, const N: usize> Data<T> for [T; N] {
     }
 }
 
-impl<F: num::Float + TotalOrder, const N: usize> SortableData<F> for [F; N] {
-    fn argsort_unstable(&self) -> Vec<usize> {
-        let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
-        indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
-        return indices;
-    }
+impl<F: TotalCmp + num::Float + TotalOrder + Clone + Sync, const N: usize> SortableData<F> for [F; N] {
+    fn as_contiguous_slice(&self) -> Option<&[F]> { Some(self.as_slice()) }
 }
 
 impl <T: Clone> Data<T> for ArrayView<'_, T, Ix1> {
@@ -127,13 +213,8 @@ impl <T: Clone> Data<T> for ArrayView<'_, T, Ix1> {
 }
 
 impl <F> SortableData<F> for ArrayView<'_, F, Ix1>
-where F: num::Float + TotalOrder
-{
-    fn argsort_unstable(&self) -> Vec<usize> {
-        let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
-        indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
-        return indices;
-    }
+where F: TotalCmp + num::Float + TotalOrder + Clone + Sync {
+    fn as_contiguous_slice(&self) -> Option<&[F]> { self.as_slice() }
 }
 
 pub trait BinaryLabel: Clone + Copy {
@@ -254,7 +335,7 @@ pub fn score_maybe_sorted_sample<S, P, B, W>(
     weights: Option<&impl Data<W>>,
     order: Option<Order>,
 ) -> f64
-where S: ScoreSortedDescending, P: IntoF64 + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
+where S: ScoreSortedDescending, P: IntoF64 + TotalCmp + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
 {
     return match order {
         Some(o) => {
@@ -264,7 +345,8 @@ where S: ScoreSortedDescending, P: IntoF64 + num::Float + TotalOrder, B: BinaryL
             }
         }
         None => {
-            let indices = predictions.argsort_unstable();
+            let mut indices = predictions.argsort_unstable(None);
+            indices.reverse(); // score_maybe_sorted_sample needs descending order
             let sorted_labels = select(labels, &indices);
             let sorted_predictions = select(predictions, &indices);
             match weights {
@@ -531,7 +613,7 @@ pub fn average_precision<P, B, W>(
     weights: Option<&impl Data<W>>,
     order: Option<Order>,
 ) -> f64
-where P: IntoF64 + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
+where P: IntoF64 + TotalCmp + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
 {
     return score_maybe_sorted_sample(AveragePrecision, predictions, labels, weights, order);
 }
@@ -544,7 +626,7 @@ pub fn roc_auc<P, B, W>(
     order: Option<Order>,
     max_fpr: Option<f64>,
 ) -> f64
-where P: IntoF64 + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
+where P: IntoF64 + TotalCmp + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
 {
     return score_maybe_sorted_sample(RocAucWithOptionalMaxFPR::new(max_fpr), predictions, labels, weights, order);
 }
@@ -696,7 +778,7 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
         weights: Option<PyReadonlyArray1<'py, W>>,
         order: Option<PyOrder>,
     ) -> f64
-    where P: IntoF64 + Element + num::Float + TotalOrder, B: BinaryLabel + Element, W: IntoF64 + Element
+    where P: IntoF64 + TotalCmp + Element + num::Float + TotalOrder, B: BinaryLabel + Element, W: IntoF64 + Element
     {
         let labels = labels.as_array();
         let predictions = predictions.as_array();
@@ -968,6 +1050,64 @@ pub fn loo_cossim_many_py_f32<'py>(
     return loo_cossim_many_generic_py(py, typed_data);
 }
 
+// ── argsort / sort Python API ────────────────────────────────────────────────
+//
+// Differences from numpy.argsort / numpy.sort:
+//   - 1D only (no `axis` parameter)
+//   - `stable: bool = False` instead of numpy's `kind` string
+//   - `num_threads: int | None = None`  (None → sequential; n → Rayon pool of n)
+//   - No `order` parameter (no structured arrays)
+//   - argsort always returns int64 (numpy returns intp, platform-dependent)
+//   - NaN sorts to end (consistent with numpy float behaviour via total_cmp)
+
+macro_rules! argsort_py {
+    ($fname:ident, $pyname:literal, $type:ty) => {
+        #[pyfunction(name = $pyname)]
+        #[pyo3(signature = (data, *, stable=false, num_threads=None))]
+        pub fn $fname<'py>(
+            py: Python<'py>,
+            data: PyReadonlyArray1<'py, $type>,
+            stable: bool,
+            num_threads: Option<usize>,
+        ) -> PyResult<Bound<'py, PyArray1<i64>>> {
+            let arr = data.as_array();
+            let len = arr.len();
+            let pool = build_pool(num_threads);
+            let indices = py.detach(|| do_argsort(&arr, len, stable, pool.as_ref()));
+            let out: Vec<i64> = indices.into_iter().map(|i| i as i64).collect();
+            Ok(PyArray1::from_vec(py, out))
+        }
+    };
+    ($fname:ident, $pyname:literal, $type:ty, $module:ident) => {
+        argsort_py!($fname, $pyname, $type);
+        $module.add_function(wrap_pyfunction!($fname, $module)?).unwrap();
+    };
+}
+
+macro_rules! sort_inplace_py {
+    ($fname:ident, $pyname:literal, $type:ty) => {
+        #[pyfunction(name = $pyname)]
+        #[pyo3(signature = (data, *, stable=false, num_threads=None))]
+        pub fn $fname<'py>(
+            py: Python<'py>,
+            data: &Bound<'py, PyArray1<$type>>,
+            stable: bool,
+            num_threads: Option<usize>,
+        ) -> PyResult<()> {
+            let mut arr = unsafe { data.as_array_mut() };
+            let slice = arr.as_slice_mut()
+                .ok_or_else(|| PyTypeError::new_err("sort_inplace requires a C-contiguous array"))?;
+            let pool = build_pool(num_threads);
+            py.detach(|| do_sort(slice, stable, pool.as_ref()));
+            Ok(())
+        }
+    };
+    ($fname:ident, $pyname:literal, $type:ty, $module:ident) => {
+        sort_inplace_py!($fname, $pyname, $type);
+        $module.add_function(wrap_pyfunction!($fname, $module)?).unwrap();
+    };
+}
+
 #[pymodule(name = "_scors")]
 fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     average_precision_py!(average_precision_bool_f32, "average_precision_bool_f32", bool, f32, m);
@@ -1050,6 +1190,31 @@ fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f64, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f32, m)?).unwrap();
     m.add_class::<PyOrder>().unwrap();
+
+    argsort_py!(argsort_f32,  "argsort_f32",  f32,  m);
+    argsort_py!(argsort_f64,  "argsort_f64",  f64,  m);
+    argsort_py!(argsort_i8,   "argsort_i8",   i8,   m);
+    argsort_py!(argsort_i16,  "argsort_i16",  i16,  m);
+    argsort_py!(argsort_i32,  "argsort_i32",  i32,  m);
+    argsort_py!(argsort_i64,  "argsort_i64",  i64,  m);
+    argsort_py!(argsort_u8,   "argsort_u8",   u8,   m);
+    argsort_py!(argsort_u16,  "argsort_u16",  u16,  m);
+    argsort_py!(argsort_u32,  "argsort_u32",  u32,  m);
+    argsort_py!(argsort_u64,  "argsort_u64",  u64,  m);
+    argsort_py!(argsort_bool, "argsort_bool", bool, m);
+
+    sort_inplace_py!(sort_inplace_f32,  "sort_inplace_f32",  f32,  m);
+    sort_inplace_py!(sort_inplace_f64,  "sort_inplace_f64",  f64,  m);
+    sort_inplace_py!(sort_inplace_i8,   "sort_inplace_i8",   i8,   m);
+    sort_inplace_py!(sort_inplace_i16,  "sort_inplace_i16",  i16,  m);
+    sort_inplace_py!(sort_inplace_i32,  "sort_inplace_i32",  i32,  m);
+    sort_inplace_py!(sort_inplace_i64,  "sort_inplace_i64",  i64,  m);
+    sort_inplace_py!(sort_inplace_u8,   "sort_inplace_u8",   u8,   m);
+    sort_inplace_py!(sort_inplace_u16,  "sort_inplace_u16",  u16,  m);
+    sort_inplace_py!(sort_inplace_u32,  "sort_inplace_u32",  u32,  m);
+    sort_inplace_py!(sort_inplace_u64,  "sort_inplace_u64",  u64,  m);
+    sort_inplace_py!(sort_inplace_bool, "sort_inplace_bool", bool, m);
+
     return Ok(());
 }
 

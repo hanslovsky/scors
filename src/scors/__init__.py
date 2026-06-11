@@ -8,6 +8,7 @@ import numpy as np
 from . import _scors as scors
 from ._scors import loo_cossim
 
+
 __doc__ = scors.__doc__
 _logger = logging.getLogger("scors")
 _supported_label_types = (
@@ -68,6 +69,86 @@ def _loo_cossim_many(data: np.ndarray):
     if data.dtype == np.float64:
         return scors.loo_cossim_many_f64(data)
     raise TypeError(f"Only float32 and float64 data supported, but found {data.dtype}")
+
+
+_supported_sortable_types = {
+    "float32": "f32",
+    "float64": "f64",
+    "int8":    "i8",
+    "int16":   "i16",
+    "int32":   "i32",
+    "int64":   "i64",
+    "uint8":   "u8",
+    "uint16":  "u16",
+    "uint32":  "u32",
+    "uint64":  "u64",
+    "bool":    "bool",
+}
+
+
+def argsort(
+    a: np.ndarray,
+    *,
+    stable: bool = False,
+    num_threads: int | None = None,
+) -> np.ndarray:
+    """Return indices that sort `a` in ascending order (1D only).
+
+    Differences from numpy.argsort:
+    - 1D only — no ``axis`` parameter.
+    - ``stable`` bool instead of ``kind`` string.
+    - ``num_threads``: ``None`` → global Rayon pool (all CPUs); ``n`` → pool of n threads.
+    - Always returns int64 (numpy returns intp).
+    - NaN sorts to end for float dtypes (via total_cmp).
+    """
+    dtype_name = a.dtype.name
+    suffix = _supported_sortable_types.get(dtype_name)
+    if suffix is None:
+        raise TypeError(f"argsort: unsupported dtype {a.dtype}. Supported: {tuple(_supported_sortable_types)}")
+    fn = getattr(scors, f"argsort_{suffix}")
+    return fn(a, stable=stable, num_threads=num_threads)
+
+
+def sort_inplace(
+    a: np.ndarray,
+    *,
+    stable: bool = False,
+    num_threads: int | None = None,
+) -> None:
+    """Sort `a` in place in ascending order (1D only, C-contiguous).
+
+    Differences from numpy.ndarray.sort:
+    - 1D only — no ``axis`` parameter.
+    - ``stable`` bool instead of ``kind`` string.
+    - ``num_threads``: ``None`` → global Rayon pool (all CPUs); ``n`` → pool of n threads.
+    - NaN sorts to end for float dtypes (via total_cmp).
+    - Raises TypeError for non-C-contiguous arrays (use ``numpy.ascontiguousarray`` first).
+    """
+    dtype_name = a.dtype.name
+    suffix = _supported_sortable_types.get(dtype_name)
+    if suffix is None:
+        raise TypeError(f"sort_inplace: unsupported dtype {a.dtype}. Supported: {tuple(_supported_sortable_types)}")
+    fn = getattr(scors, f"sort_inplace_{suffix}")
+    fn(a, stable=stable, num_threads=num_threads)
+
+
+def sort(
+    a: np.ndarray,
+    *,
+    stable: bool = False,
+    num_threads: int | None = None,
+) -> np.ndarray:
+    """Return a sorted copy of `a` in ascending order (1D only).
+
+    Differences from numpy.sort:
+    - 1D only — no ``axis`` parameter.
+    - ``stable`` bool instead of ``kind`` string.
+    - ``num_threads``: ``None`` → global Rayon pool (all CPUs); ``n`` → pool of n threads.
+    - NaN sorts to end for float dtypes (via total_cmp).
+    """
+    out = a.copy()
+    sort_inplace(out, stable=stable, num_threads=num_threads)
+    return out
 
 
 def loo_cossim_many(data: np.ndarray):
@@ -150,6 +231,7 @@ def roc_auc_on_two_sorted_samples(
 
 __all__ = sorted([
     "Order",
+    "argsort",
     "average_precision",
     "average_precision_on_two_sorted_samples",
     "loo_cossim",
@@ -157,4 +239,6 @@ __all__ = sorted([
     "roc_auc",
     "roc_auc_on_two_sorted_samples",
     "scors",
+    "sort",
+    "sort_inplace",
 ])
