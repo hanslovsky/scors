@@ -3,10 +3,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-import numba
 import numpy as np
 import pytest
 from numpy.typing import DTypeLike
+
+numba = pytest.importorskip("numba")
 
 from sklearn.metrics import average_precision_score as ap_skl, roc_auc_score as roc_auc_skl
 
