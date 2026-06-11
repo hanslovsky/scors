@@ -623,25 +623,32 @@ where P: num::Float + From<f32>
 }
 
 
-/// Accumulate `row` into `sum` element-wise.  The slice signature lets LLVM
-/// prove unit stride and emit SIMD instructions.
+/// Accumulate `row` into `sum` element-wise.
+///
+/// When monomorphized with `Copied<slice::Iter>` LLVM proves unit stride and
+/// emits SIMD.  When called with ndarray's strided `Iter` it stays scalar.
 #[inline]
-fn accum_row<F: num::Float + AddAssign>(row: &[F], sum: &mut [F]) {
-    for (f, s) in row.iter().zip(sum.iter_mut()) {
-        *s += *f;
+fn accum_row<F: num::Float + AddAssign>(row: impl Iterator<Item = F>, sum: &mut [F]) {
+    for (f, s) in row.zip(sum.iter_mut()) {
+        *s += f;
     }
 }
 
-/// Compute (prod_sum, m_sqs, l_sqs) for one replicate row against the
-/// already-accumulated replicate_sum.  Slice signature enables SIMD.
+/// Compute (prod_sum, m_sqs, l_sqs) for one replicate row.
+///
+/// Same vectorization note as `accum_row`.
 #[inline]
-fn score_row<F: num::Float + AddAssign>(row: &[F], sum: &[F], loo_weight_factor: F) -> (F, F, F) {
+fn score_row<F: num::Float + AddAssign>(
+    row: impl Iterator<Item = F>,
+    sum: impl Iterator<Item = F>,
+    loo_weight_factor: F,
+) -> (F, F, F) {
     let mut prod_sum = F::zero();
     let mut m_sqs = F::zero();
     let mut l_sqs = F::zero();
-    for (f, s) in row.iter().zip(sum.iter()) {
-        let m_f = *f;
-        let l_f = (*s - *f) * loo_weight_factor;
+    for (f, s) in row.zip(sum) {
+        let m_f = f;
+        let l_f = (s - f) * loo_weight_factor;
         prod_sum += m_f * l_f;
         m_sqs += m_f * m_f;
         l_sqs += l_f * l_f;
@@ -649,57 +656,65 @@ fn score_row<F: num::Float + AddAssign>(row: &[F], sum: &[F], loo_weight_factor:
     (prod_sum, m_sqs, l_sqs)
 }
 
-pub fn loo_cossim<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>, replicate_sum: &mut ArrayViewMut1<'_, F>) -> F {
-    let num_replicates = mat.shape()[0];
-    let loo_weight = F::from(num_replicates - 1).unwrap();
-    let loo_weight_factor = F::from(1).unwrap() / loo_weight;
-
-    // If both the feature axis and replicate_sum have unit stride, extract
-    // plain slices so LLVM can prove contiguous access and emit SIMD.
-    // mat.strides()[1] is the stride of the feature (innermost) axis;
-    // replicate_sum.strides()[0] is the stride of the only axis.
-    // Both are 1 whenever the caller holds a C-contiguous row — the common
-    // case from loo_cossim_many (each 2-D slice of a 3-D array whose last
-    // two axes are contiguous) and from direct numpy fancy-index results.
-    let contiguous = mat.strides()[1] == 1 && replicate_sum.strides()[0] == 1;
-
-    if contiguous {
-        for mat_replicate in mat.outer_iter() {
-            accum_row(mat_replicate.as_slice().unwrap(), replicate_sum.as_slice_mut().unwrap());
-        }
-        let mut result = F::zero();
-        for mat_replicate in mat.outer_iter() {
-            let (prod_sum, m_sqs, l_sqs) = score_row(
-                mat_replicate.as_slice().unwrap(),
-                replicate_sum.as_slice().unwrap(),
-                loo_weight_factor,
-            );
-            result += prod_sum / (m_sqs * l_sqs).sqrt();
-        }
-        return result / F::from(num_replicates).unwrap();
-    }
-
-    // Strided fallback — arbitrary numpy memory layouts.
-    for mat_replicate in mat.outer_iter() {
-        for (feature, feature_sum) in mat_replicate.iter().zip(replicate_sum.iter_mut()) {
-            *feature_sum += *feature;
-        }
+/// Core two-pass loop shared by the contiguous and strided paths.
+///
+/// `rows` must be `Clone` because the algorithm makes two passes: one to
+/// accumulate `sum`, one to score.  The `Clone` is free — the iterator is
+/// just a pointer and two `usize`s on the stack.
+///
+/// LLVM monomorphizes separately for each `Row` type: when called with
+/// `Chunks`-derived slice iterators it emits SIMD; when called with
+/// ndarray's strided iterators it stays scalar.
+///
+/// Note: `impl Fn(&ArrayView1) -> I` would be cleaner at the call site but
+/// hits a Rust lifetime limitation — `as_slice()` ties its `&[F]` return to
+/// `&self` (the view reference), not to the underlying data lifetime, so the
+/// returned iterator borrows a local and the compiler rejects it.  The
+/// iterator solution avoids this: `chunks()` borrows directly from `mat`
+/// and `into_iter()` transfers the data lifetime from the view.
+#[inline]
+fn loo_cossim_loops<F, Row>(
+    rows: impl Iterator<Item = Row> + Clone,
+    sum: &mut [F],
+    loo_weight_factor: F,
+    num_replicates: usize,
+) -> F
+where
+    F: num::Float + AddAssign,
+    Row: Iterator<Item = F>,
+{
+    for row in rows.clone() {
+        accum_row(row, sum);
     }
     let mut result = F::zero();
-    for mat_replicate in mat.outer_iter() {
-        let mut m_sqs = F::zero();
-        let mut l_sqs = F::zero();
-        let mut prod_sum = F::zero();
-        for (feature, feature_sum) in mat_replicate.iter().zip(replicate_sum.iter()) {
-            let m_f = *feature;
-            let l_f = (*feature_sum - *feature) * loo_weight_factor;
-            prod_sum += m_f * l_f;
-            m_sqs += m_f * m_f;
-            l_sqs += l_f * l_f;
-        }
+    for row in rows {
+        let (prod_sum, m_sqs, l_sqs) = score_row(row, sum.iter().copied(), loo_weight_factor);
         result += prod_sum / (m_sqs * l_sqs).sqrt();
     }
-    return result / F::from(num_replicates).unwrap();
+    result / F::from(num_replicates).unwrap()
+}
+
+pub fn loo_cossim<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>, replicate_sum: &mut ArrayViewMut1<'_, F>) -> F {
+    let num_replicates = mat.shape()[0];
+    let loo_weight_factor = F::from(1).unwrap() / F::from(num_replicates - 1).unwrap();
+    let ncols = mat.shape()[1];
+    // replicate_sum is always created from Array1::zeros() inside Rust, so
+    // it is guaranteed to be contiguous.
+    let sum = replicate_sum.as_slice_mut().unwrap();
+
+    // mat.as_slice() succeeds iff the matrix is fully C-contiguous (strides
+    // == [ncols, 1]).  chunks() then yields &[F] slices that borrow directly
+    // from mat's data so LLVM sees plain pointer arithmetic and emits SIMD.
+    // For non-contiguous input (strided or Fortran-order) outer_iter() +
+    // into_iter() transfer the data lifetime from the view correctly.
+    //
+    // In the primary call path (loo_cossim_many, univariate sampling) each
+    // 2-D slice has strides (ncols, 1) and as_slice() always succeeds.
+    if let Some(mat_slice) = mat.as_slice() {
+        loo_cossim_loops(mat_slice.chunks(ncols).map(|s| s.iter().copied()), sum, loo_weight_factor, num_replicates)
+    } else {
+        loo_cossim_loops(mat.outer_iter().map(|r| r.into_iter().copied()), sum, loo_weight_factor, num_replicates)
+    }
 }
 
 
