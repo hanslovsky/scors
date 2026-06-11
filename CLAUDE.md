@@ -65,8 +65,8 @@ The manylinux CI wheels target generic x86-64 baseline (SSE2). The SLURM cluster
 
 ## Dependency Notes
 
-- `numba` is a dev dependency used only for benchmarks (`tests/benchmarks/`). It has no cp315 wheel, so it is gated with `python_version < '3.15'` — benchmarks are simply unavailable on Python 3.15+.
 - `ipython` 9.x requires Python ≥3.11, which is why `requires-python = ">=3.11"` (Python 3.10 support was dropped when bumping to ipython 9.x).
+- `requires-python` upper bound tracks NumPy: currently `<3.15` because NumPy 2.4.x does not support Python 3.15. When **NumPy 2.5.0** final is released: (1) relax upper bound to `<3.16` and add 3.15 to CI matrix, (2) bump lower bound to `>=3.12` (NumPy 2.5 drops Python 3.11), (3) bump `numpy>=2.5.0` in dev deps.
 
 ## Known Design Notes
 
