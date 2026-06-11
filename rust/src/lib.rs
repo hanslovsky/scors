@@ -12,58 +12,58 @@ use std::cmp::PartialOrd;
 use std::iter::{DoubleEndedIterator,repeat};
 use std::ops::AddAssign;
 
+// Convenience bound for types that can be widened into f64 scores/weights.
+pub trait IntoF64: Into<f64> + Copy + PartialOrd {}
+impl<T: Into<f64> + Copy + PartialOrd> IntoF64 for T {}
+
 #[derive(Clone, Copy)]
 pub enum Order {
     ASCENDING,
     DESCENDING
 }
 
+/// Infinite iterator of a constant f64 weight — used for the no-weights path.
 #[derive(Clone, Copy)]
-struct ConstWeight<F: num::Float> {
-    value: F
+struct ConstWeight {
+    value: f64,
 }
 
-impl <F: num::Float> ConstWeight<F> {
-    fn new(value: F) -> Self {
-        return ConstWeight { value: value };
-    }
+impl ConstWeight {
     fn one() -> Self {
-        return Self::new(F::one());
+        return ConstWeight { value: 1.0 };
     }
 }
 
-pub trait Data<T: Clone>: {
-    // TODO This is necessary because it seems that there is no trait like that in rust
-    //      Maybe I am just not aware, but for now use my own trait.
+impl Iterator for ConstWeight {
+    type Item = f64;
+    fn next(&mut self) -> Option<f64> {
+        return Some(self.value);
+    }
+}
+
+impl DoubleEndedIterator for ConstWeight {
+    fn next_back(&mut self) -> Option<f64> {
+        return Some(self.value);
+    }
+}
+
+impl Data<f64> for ConstWeight {
+    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = f64> + Clone {
+        return *self;
+    }
+
+    fn get_at(&self, _index: usize) -> f64 {
+        return self.value;
+    }
+}
+
+pub trait Data<T: Clone> {
     fn get_iterator(&self) -> impl DoubleEndedIterator<Item = T> + Clone;
     fn get_at(&self, index: usize) -> T;
 }
 
 pub trait SortableData<T> {
     fn argsort_unstable(&self) -> Vec<usize>;
-}
-
-impl <F: num::Float> Iterator for ConstWeight<F> {
-    type Item = F;
-    fn next(&mut self) -> Option<F> {
-        return Some(self.value);
-    }
-}
-
-impl <F: num::Float> DoubleEndedIterator for ConstWeight<F> {
-    fn next_back(&mut self) -> Option<F> {
-        return Some(self.value);
-    }
-}
-
-impl <F: num::Float> Data<F> for ConstWeight<F> {
-    fn get_iterator(&self) -> impl DoubleEndedIterator<Item = F> + Clone {
-        return ConstWeight::new(self.value);
-    }
-
-    fn get_at(&self, _index: usize) -> F {
-        return self.value.clone();
-    }
 }
 
 impl <T: Clone> Data<T> for Vec<T> {
@@ -75,11 +75,10 @@ impl <T: Clone> Data<T> for Vec<T> {
     }
 }
 
-impl SortableData<f64> for Vec<f64> {
+impl<F: num::Float + TotalOrder> SortableData<F> for Vec<F> {
     fn argsort_unstable(&self) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
         indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
-        // indices.sort_unstable_by_key(|i| self[*i]);
         return indices;
     }
 }
@@ -93,7 +92,7 @@ impl <T: Clone> Data<T> for &[T] {
     }
 }
 
-impl SortableData<f64> for &[f64] {
+impl<F: num::Float + TotalOrder> SortableData<F> for &[F] {
     fn argsort_unstable(&self) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
         indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
@@ -110,7 +109,7 @@ impl <T: Clone, const N: usize> Data<T> for [T; N] {
     }
 }
 
-impl <const N: usize> SortableData<f64> for [f64; N] {
+impl<F: num::Float + TotalOrder, const N: usize> SortableData<F> for [F; N] {
     fn argsort_unstable(&self) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..self.len()).collect::<Vec<_>>();
         indices.sort_unstable_by(|i, k| self[*k].total_cmp(&self[*i]));
@@ -206,46 +205,38 @@ where T: Copy, I: Data<T>
     return selection;
 }
 
-pub trait ScoreAccumulator: num::Float + AddAssign + From<bool> + From<f32> {}
-impl<T: num::Float + AddAssign + From<bool> + From<f32>> ScoreAccumulator for T {}
-
-pub trait IntoScore<S: ScoreAccumulator>: Into<S> + num::Float {}
-impl<S: ScoreAccumulator, T: Into<S> + num::Float> IntoScore<S> for T {}
-
-
-
 pub trait ScoreSortedDescending {
-    fn _score<S: ScoreAccumulator>(&self, labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S;
-    fn score<S, P, B, W>(&self, labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> S
-    where S: ScoreAccumulator, P: IntoScore<S>, B: BinaryLabel, W: IntoScore<S>
+    fn _score(&self, labels_with_weights: impl Iterator<Item = (f64, (bool, f64))> + Clone) -> f64;
+    fn score<P, B, W>(&self, labels_with_weights: impl Iterator<Item = (P, (B, W))> + Clone) -> f64
+    where P: IntoF64, B: BinaryLabel, W: IntoF64
     {
         return self._score(
-            labels_with_weights.map(|(p, (b, w))| -> (S, (bool, S)) { (p.into(), (b.get_value(), w.into()))})
+            labels_with_weights.map(|(p, (b, w))| -> (f64, (bool, f64)) { (p.into(), (b.get_value(), w.into()))})
         )
     }
 }
 
 
-pub fn score_sorted_iterators<S, SA, P, B, W>(
+pub fn score_sorted_iterators<S, P, B, W>(
     score: S,
     predictions: impl Iterator<Item = P> + Clone,
     labels: impl Iterator<Item = B> + Clone,
     weights: impl Iterator<Item = W> + Clone,
-) -> SA
-where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel, W: IntoScore<SA> {
+) -> f64
+where S: ScoreSortedDescending, P: IntoF64, B: BinaryLabel, W: IntoF64 {
     let zipped = predictions.zip(labels.zip(weights));
     return score.score(zipped);
 }
 
 
-pub fn score_sorted_sample<S, SA, P, B, W>(
+pub fn score_sorted_sample<S, P, B, W>(
     score: S,
     predictions: &impl Data<P>,
     labels: &impl Data<B>,
     weights: &impl Data<W>,
     order: Order,
-) -> SA
-where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel, W: IntoScore<SA> + Clone {
+) -> f64
+where S: ScoreSortedDescending, P: IntoF64, B: BinaryLabel, W: IntoF64 + Clone {
     let p = predictions.get_iterator();
     let l = labels.get_iterator();
     let w = weights.get_iterator();
@@ -256,20 +247,20 @@ where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: Binar
 }
 
 
-pub fn score_maybe_sorted_sample<S, SA, P, B, W>(
+pub fn score_maybe_sorted_sample<S, P, B, W>(
     score: S,
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
     weights: Option<&impl Data<W>>,
     order: Option<Order>,
-) -> SA
-where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel, W: IntoScore<SA> + Clone
+) -> f64
+where S: ScoreSortedDescending, P: IntoF64 + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
 {
     return match order {
         Some(o) => {
             match weights {
                 Some(w) => score_sorted_sample(score, predictions, labels, w, o),
-                None => score_sorted_sample(score, predictions, labels, &ConstWeight::<W>::one(), o),
+                None => score_sorted_sample(score, predictions, labels, &ConstWeight::one(), o),
             }
         }
         None => {
@@ -281,26 +272,14 @@ where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: Binar
                     let sorted_weights = select(w, &indices);
                     score_sorted_sample(score, &sorted_predictions, &sorted_labels, &sorted_weights, Order::DESCENDING)
                 }
-                None => score_sorted_sample(score, &sorted_predictions, &sorted_labels, &ConstWeight::<W>::one(), Order::DESCENDING)
+                None => score_sorted_sample(score, &sorted_predictions, &sorted_labels, &ConstWeight::one(), Order::DESCENDING)
             }
         }
     };
 }
 
 
-pub fn score_sample<S, SA, P, B, W>(
-    score: S,
-    predictions: &(impl Data<P> + SortableData<P>),
-    labels: &impl Data<B>,
-    weights: Option<&impl Data<W>>,
-) -> SA
-
-where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel, W: IntoScore<SA> + Clone {
-    return score_maybe_sorted_sample(score, predictions, labels, weights, None);
-}
-
-
-pub fn score_two_sorted_samples<S, SA, P, B, W>(
+pub fn score_two_sorted_samples<S, P, B, W>(
     score: S,
     predictions1: impl Iterator<Item = P> + Clone,
     label1: impl Iterator<Item = B> + Clone,
@@ -308,8 +287,8 @@ pub fn score_two_sorted_samples<S, SA, P, B, W>(
     predictions2: impl Iterator<Item = P> + Clone,
     label2: impl Iterator<Item = B> + Clone,
     weight2: impl Iterator<Item = W> + Clone,
-) -> SA
-where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel + PartialOrd, W: IntoScore<SA>
+) -> f64
+where S: ScoreSortedDescending, P: IntoF64, B: BinaryLabel + PartialOrd, W: IntoF64
 {
     return score_two_sorted_samples_zipped(
         score,
@@ -319,127 +298,60 @@ where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: Binar
 }
 
 
-pub fn score_two_sorted_samples_zipped<S, SA, P, B, W>(
+pub fn score_two_sorted_samples_zipped<S, P, B, W>(
     score: S,
     iter1: impl Iterator<Item = (P, (B, W))> + Clone,
     iter2: impl Iterator<Item = (P, (B, W))> + Clone,
-) -> SA
-where S: ScoreSortedDescending, SA: ScoreAccumulator, P: IntoScore<SA>, B: BinaryLabel + PartialOrd, W: IntoScore<SA>
+) -> f64
+where S: ScoreSortedDescending, P: IntoF64, B: BinaryLabel + PartialOrd, W: IntoF64
 {
     let combined_iter = combine::combine::CombineIterDescending::new(iter1, iter2);
     return score.score(combined_iter);
 }
 
 
-struct AveragePrecision {
-    
-}
-
-
-impl AveragePrecision {
-    fn new() -> Self {
-        return AveragePrecision{};
-    }
-}
+struct AveragePrecision;
 
 
 #[derive(Clone,Copy,Debug)]
-struct Positives<P>
-where P: num::Float + From<bool> + AddAssign
-{
-    tps: P,
-    fps: P,
+struct Positives {
+    tps: f64,
+    fps: f64,
 }
 
-impl <P> Positives<P>
-where P: num::Float + From<bool> + AddAssign
-{
-    fn new(tps: P, fps: P) -> Self {
+impl Positives {
+    fn new(tps: f64, fps: f64) -> Self {
         return Positives { tps, fps };
     }
 
     fn zero() -> Self {
-        return Positives::new(P::zero(), P::zero());
+        return Positives::new(0.0, 0.0);
     }
 
-    fn add(&mut self, label: bool, weight: P) {
-        let label: P = label.into();
-        let tp = weight * label;
-        let fp = weight - tp;  // (weight*(1 -label) = weight - weight * label = weight - tp)
+    fn add(&mut self, label: bool, weight: f64) {
+        let tp = weight * (label as u8) as f64;
+        let fp = weight - tp;
         self.tps += tp;
         self.fps += fp;
     }
 
-    fn positives_sum(&self) -> P {
+    fn positives_sum(&self) -> f64 {
         return self.tps + self.fps;
     }
 
-    fn precision(&self) -> P {
+    fn precision(&self) -> f64 {
         return self.tps / self.positives_sum();
     }
 }
 
 
 impl ScoreSortedDescending for AveragePrecision {
-    fn _score<S: ScoreAccumulator>(&self, mut labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S
+    fn _score(&self, mut labels_with_weights: impl Iterator<Item = (f64, (bool, f64))> + Clone) -> f64
     {
-        let mut positives: Positives<S> = Positives::zero();
-        let mut last_p: S = f32::NAN.into();
-        let mut last_tps: S = S::zero();
-        let mut ap: S = S::zero();
-
-        // TODO can we unify this preparation step with the loop?
-        match labels_with_weights.next() {
-            None => (), // TODO: Sohuld we return an error in this case?
-            Some((p, (label, w))) => {
-                positives.add(label, w);
-                last_p = p;
-            }
-        }
-        
-        for (p, (label, w)) in labels_with_weights {
-            if last_p != p {
-                ap += (positives.tps - last_tps) * positives.precision();
-                last_p = p;
-                last_tps = positives.tps;
-            }
-            positives.add(label.get_value(), w.into());
-        }
-
-        ap += (positives.tps - last_tps) * positives.precision();
-        
-        // Special case for tps == 0 following sklearn
-        // https://github.com/scikit-learn/scikit-learn/blob/5cce87176a530d2abea45b5a7e5a4d837c481749/sklearn/metrics/_ranking.py#L1032-L1039
-        // I.e. if tps is 0.0, there are no positive samples in labels: Either all labels are 0, or all weights (for positive labels) are 0
-        return if positives.tps == S::zero() {
-            S::zero()
-        } else {
-            ap / positives.tps
-        };
-    }
-}
-
-
-struct RocAuc {
-
-}
-
-
-impl RocAuc {
-    fn new() -> Self {
-        return RocAuc { };
-    }
-}
-
-
-impl ScoreSortedDescending for RocAuc {
-    fn _score<S: ScoreAccumulator>(&self, mut labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S
-    {
-        let mut positives: Positives<S> = Positives::zero();
-        let mut last_p: S = f32::NAN.into();
-        let mut last_counted_fp = S::zero();
-        let mut last_counted_tp = S::zero();
-        let mut area_under_curve = S::zero();
+        let mut positives = Positives::zero();
+        let mut last_p = f64::NAN;
+        let mut last_tps = 0.0f64;
+        let mut ap = 0.0f64;
 
         // TODO can we unify this preparation step with the loop?
         match labels_with_weights.next() {
@@ -449,14 +361,52 @@ impl ScoreSortedDescending for RocAuc {
                 last_p = p;
             }
         }
-        
+
+        for (p, (label, w)) in labels_with_weights {
+            if last_p != p {
+                ap += (positives.tps - last_tps) * positives.precision();
+                last_p = p;
+                last_tps = positives.tps;
+            }
+            positives.add(label, w);
+        }
+
+        ap += (positives.tps - last_tps) * positives.precision();
+
+        // Special case for tps == 0 following sklearn
+        // https://github.com/scikit-learn/scikit-learn/blob/5cce87176a530d2abea45b5a7e5a4d837c481749/sklearn/metrics/_ranking.py#L1032-L1039
+        // I.e. if tps is 0.0, there are no positive samples in labels: Either all labels are 0, or all weights (for positive labels) are 0
+        return if positives.tps == 0.0 { 0.0 } else { ap / positives.tps };
+    }
+}
+
+
+struct RocAuc;
+
+
+impl ScoreSortedDescending for RocAuc {
+    fn _score(&self, mut labels_with_weights: impl Iterator<Item = (f64, (bool, f64))> + Clone) -> f64
+    {
+        let mut positives = Positives::zero();
+        let mut last_p = f64::NAN;
+        let mut last_counted_fp = 0.0f64;
+        let mut last_counted_tp = 0.0f64;
+        let mut area_under_curve = 0.0f64;
+
+        // TODO can we unify this preparation step with the loop?
+        match labels_with_weights.next() {
+            None => (), // TODO: Should we return an error in this case?
+            Some((p, (label, w))) => {
+                positives.add(label, w);
+                last_p = p;
+            }
+        }
+
         for (p, (label, w)) in labels_with_weights {
             if last_p != p {
                 area_under_curve += area_under_line_segment(
-                    last_counted_fp,
-                    positives.fps,
-                    last_counted_tp,
-                    positives.tps,
+                    last_counted_fp, positives.fps,
+                    last_counted_tp, positives.tps,
                 );
                 last_counted_fp = positives.fps;
                 last_counted_tp = positives.tps;
@@ -465,10 +415,8 @@ impl ScoreSortedDescending for RocAuc {
             positives.add(label, w);
         }
         area_under_curve += area_under_line_segment(
-            last_counted_fp,
-            positives.fps,
-            last_counted_tp,
-            positives.tps,
+            last_counted_fp, positives.fps,
+            last_counted_tp, positives.tps,
         );
         return area_under_curve / (positives.tps * positives.fps);
     }
@@ -476,21 +424,19 @@ impl ScoreSortedDescending for RocAuc {
 
 
 struct RocAucWithMaxFPR {
-    max_fpr: f32,
+    max_fpr: f64,
 }
 
 
 impl RocAucWithMaxFPR {
-    fn new(max_fpr: f32) -> Self {
+    fn new(max_fpr: f64) -> Self {
         return RocAucWithMaxFPR { max_fpr };
     }
 
-    fn get_positive_sum<B, W>(labels_with_weights: impl Iterator<Item = (B, W)>) -> Positives<W>
-    where B: BinaryLabel, W: num::Float + From::<bool> + AddAssign
-    {
-        let mut positives: Positives<W>  = Positives::zero();
+    fn get_positive_sum(labels_with_weights: impl Iterator<Item = (bool, f64)>) -> Positives {
+        let mut positives = Positives::zero();
         for (label, weight) in labels_with_weights {
-            positives.add(label.get_value(), weight);
+            positives.add(label, weight);
         }
         return positives;
     }
@@ -498,17 +444,17 @@ impl RocAucWithMaxFPR {
 
 
 impl ScoreSortedDescending for RocAucWithMaxFPR {
-    fn _score<S: ScoreAccumulator>(&self, mut labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S
+    fn _score(&self, mut labels_with_weights: impl Iterator<Item = (f64, (bool, f64))> + Clone) -> f64
     {
-        let total_positives = Self::get_positive_sum(labels_with_weights.clone().map(|(_a, b)| b));
-        let max_fpr: S = self.max_fpr.into();
+        let total_positives = Self::get_positive_sum(labels_with_weights.clone().map(|(_p, (b, w))| (b, w)));
+        let max_fpr = self.max_fpr;
         let false_positive_cutoff = max_fpr * total_positives.fps;
 
-        let mut positives: Positives<S> = Positives::zero();
-        let mut last_p: S = f32::NAN.into();
-        let mut last_counted_fp = S::zero();
-        let mut last_counted_tp = S::zero();
-        let mut area_under_curve = S::zero();
+        let mut positives = Positives::zero();
+        let mut last_p = f64::NAN;
+        let mut last_counted_fp = 0.0f64;
+        let mut last_counted_tp = 0.0f64;
+        let mut area_under_curve = 0.0f64;
 
         // TODO can we unify this preparation step with the loop?
         match labels_with_weights.next() {
@@ -518,20 +464,18 @@ impl ScoreSortedDescending for RocAucWithMaxFPR {
                 last_p = p;
             }
         }
-        
+
         for (p, (label, w)) in labels_with_weights {
             if last_p != p {
                 area_under_curve += area_under_line_segment(
-                    last_counted_fp,
-                    positives.fps,
-                    last_counted_tp,
-                    positives.tps,
+                    last_counted_fp, positives.fps,
+                    last_counted_tp, positives.tps,
                 );
                 last_counted_fp = positives.fps;
                 last_counted_tp = positives.tps;
                 last_p = p;
             }
-            let mut next_pos = positives.clone();
+            let mut next_pos = positives;
             next_pos.add(label, w);
             if next_pos.fps > false_positive_cutoff {
                 let dx = next_pos.fps - positives.fps;
@@ -541,85 +485,75 @@ impl ScoreSortedDescending for RocAucWithMaxFPR {
                     false_positive_cutoff,
                 );
                 break;
-            }
-            else {
+            } else {
                 positives = next_pos;
             }
         }
 
         area_under_curve += area_under_line_segment(
-            last_counted_fp,
-            positives.fps,
-            last_counted_tp,
-            positives.tps,
+            last_counted_fp, positives.fps,
+            last_counted_tp, positives.tps,
         );
-        
+
         let normalized_area_under_curve = area_under_curve / (total_positives.tps * total_positives.fps);
-        let one_half: S = 0.5f32.into(); 
-        let min_area = one_half * max_fpr * max_fpr;
+        let min_area = 0.5 * max_fpr * max_fpr;
         let max_area = max_fpr;
-        return one_half * (S::one() + (normalized_area_under_curve - min_area) / (max_area - min_area));
+        return 0.5 * (1.0 + (normalized_area_under_curve - min_area) / (max_area - min_area));
     }
 }
 
 
 struct RocAucWithOptionalMaxFPR {
-    // TODO: Can we have a single implementation for this and RocAuc?
-    //       This would add an unncessary check to RocAuc but performance
-    //       penalty may be negligible.
-    max_fpr: Option<f32>,
+    max_fpr: Option<f64>,
 }
 
 impl RocAucWithOptionalMaxFPR {
-    fn new(max_fpr: Option<f32>) -> Self {
+    fn new(max_fpr: Option<f64>) -> Self {
         return Self { max_fpr };
     }
 }
 
 
 impl ScoreSortedDescending for RocAucWithOptionalMaxFPR {
-    fn _score<S: ScoreAccumulator>(&self, labels_with_weights: impl Iterator<Item = (S, (bool, S))> + Clone) -> S
+    fn _score(&self, labels_with_weights: impl Iterator<Item = (f64, (bool, f64))> + Clone) -> f64
     {
         return match self.max_fpr {
             Some(mfpr) => RocAucWithMaxFPR::new(mfpr).score(labels_with_weights),
-            None => RocAuc::new().score(labels_with_weights),
+            None => RocAuc.score(labels_with_weights),
         }
     }
 }
 
 
-pub fn average_precision<S, P, B, W>(
+pub fn average_precision<P, B, W>(
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
     weights: Option<&impl Data<W>>,
     order: Option<Order>,
-) -> S
-where S: ScoreAccumulator, P: IntoScore<S>, B: BinaryLabel, W: IntoScore<S> + Clone
+) -> f64
+where P: IntoF64 + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
 {
-    return score_maybe_sorted_sample(AveragePrecision::new(), predictions, labels, weights, order);
+    return score_maybe_sorted_sample(AveragePrecision, predictions, labels, weights, order);
 }
 
 
-pub fn roc_auc<S, P, B, W>(
+pub fn roc_auc<P, B, W>(
     predictions: &(impl Data<P> + SortableData<P>),
     labels: &impl Data<B>,
     weights: Option<&impl Data<W>>,
     order: Option<Order>,
-    max_fpr: Option<f32>,
-) -> S
-where S: ScoreAccumulator, P: IntoScore<S>, B: BinaryLabel, W: IntoScore<S> + Clone
+    max_fpr: Option<f64>,
+) -> f64
+where P: IntoF64 + num::Float + TotalOrder, B: BinaryLabel, W: IntoF64
 {
     return score_maybe_sorted_sample(RocAucWithOptionalMaxFPR::new(max_fpr), predictions, labels, weights, order);
 }
 
 
-fn area_under_line_segment<P>(x0: P, x1: P, y0: P, y1: P) -> P
-where P: num::Float + From<f32>
-{
+fn area_under_line_segment(x0: f64, x1: f64, y0: f64, y1: f64) -> f64 {
     let dx = x1 - x0;
     let dy = y1 - y0;
-    let one_half: P = 0.5f32.into();
-    return dx * y0 + dy * dx * one_half;
+    return dx * y0 + dy * dx * 0.5;
 }
 
 
@@ -761,27 +695,26 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
         predictions: PyReadonlyArray1<'py, P>,
         weights: Option<PyReadonlyArray1<'py, W>>,
         order: Option<PyOrder>,
-    ) -> P
-    where P: ScoreAccumulator + Element + TotalOrder, B: BinaryLabel + Element, W: IntoScore<P> + Element
+    ) -> f64
+    where P: IntoF64 + Element + num::Float + TotalOrder, B: BinaryLabel + Element, W: Element + Into<f64> + Copy
     {
         let labels = labels.as_array();
         let predictions = predictions.as_array();
         let order = order.map(py_order_as_order);
-        let score = match weights {
+        return match weights {
             Some(weight) => {
-                let w = weight.as_array();
+                let w: Vec<f64> = weight.as_array().iter().map(|&x| x.into()).collect();
                 py.detach(move || {
-                    score_maybe_sorted_sample(self.get_score(), &predictions, &labels, Some(&w), order)
+                    score_maybe_sorted_sample(self.get_score(), &predictions, &labels, Some(&w.as_slice()), order)
                 })
             },
             None => py.detach(move || {
-                score_maybe_sorted_sample(self.get_score(), &predictions, &labels, None::<&Vec<W>>, order)
+                score_maybe_sorted_sample(self.get_score(), &predictions, &labels, None::<&Vec<f64>>, order)
             })
         };
-        return score;
     }
 
-    fn score_two_sorted_samples_py_generic<'py, B, F, W, B1, B2, F1, F2, W1, W2>(
+    fn score_two_sorted_samples_py_generic<'py, B, F, B1, F1, F2, W1, W2>(
         &self,
         py: Python<'py>,
         labels1: PyReadonlyArray1<'py, B1>,
@@ -790,36 +723,38 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
         labels2: PyReadonlyArray1<'py, B1>,
         predictions2: PyReadonlyArray1<'py, F2>,
         weights2: Option<PyReadonlyArray1<'py, W2>>,
-    ) -> F
-    where B: BinaryLabel + PartialOrd, F: ScoreAccumulator + TotalOrder + Ungil, W: IntoScore<F>, B1: Element + Into<B> + Clone, B2: Element + Into<B> + Clone, F1: Element + Into<F> + Clone, F2: Element + Into<F> + Clone, W1: Element + Into<W> + Clone, W2: Element + Into<W> + Clone
+    ) -> f64
+    where B: BinaryLabel + PartialOrd + Ungil, F: IntoF64 + Ungil,
+          B1: Element + Into<B> + Clone,
+          F1: Element + Into<F> + Clone, F2: Element + Into<F> + Clone,
+          W1: Element + Into<f64> + Clone, W2: Element + Into<f64> + Clone
     {
         let l1 = labels1.as_array().into_iter().cloned().map(|l| -> B { l.into() });
         let l2 = labels2.as_array().into_iter().cloned().map(|l| -> B { l.into() });
         let p1 = predictions1.as_array().into_iter().cloned().map(|f| -> F { f.into() });
         let p2 = predictions2.as_array().into_iter().cloned().map(|f| -> F { f.into() });
 
-
         return match (weights1, weights2) {
             (None, None) => {
                 py.detach(move || {
-                    score_two_sorted_samples(self.get_score(), p1, l1, repeat(W::one()), p2, l2, repeat(W::one()))
+                    score_two_sorted_samples(self.get_score(), p1, l1, repeat(1.0f64), p2, l2, repeat(1.0f64))
                 })
             }
             (Some(w1), None) => {
-                let w1i = w1.as_array().into_iter().cloned().map(|w| -> W { w.into() });
+                let w1i = w1.as_array().into_iter().cloned().map(|w| -> f64 { w.into() });
                 py.detach(move || {
-                    score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, repeat(W::one()))
+                    score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, repeat(1.0f64))
                 })
             }
             (None, Some(w2)) => {
-                let w2i = w2.as_array().into_iter().cloned().map(|w| -> W { w.into() });
+                let w2i = w2.as_array().into_iter().cloned().map(|w| -> f64 { w.into() });
                 py.detach(move || {
-                    score_two_sorted_samples(self.get_score(), p1, l1, repeat(W::one()), p2, l2, w2i)
+                    score_two_sorted_samples(self.get_score(), p1, l1, repeat(1.0f64), p2, l2, w2i)
                 })
             }
-            (Some(w1), Some(w2)) =>  {
-                let w1i = w1.as_array().into_iter().cloned().map(|w| -> W { w.into() });
-                let w2i = w2.as_array().into_iter().cloned().map(|w| -> W { w.into() });
+            (Some(w1), Some(w2)) => {
+                let w1i = w1.as_array().into_iter().cloned().map(|w| -> f64 { w.into() });
+                let w2i = w2.as_array().into_iter().cloned().map(|w| -> f64 { w.into() });
                 py.detach(move || {
                     score_two_sorted_samples(self.get_score(), p1, l1, w1i, p2, l2, w2i)
                 })
@@ -828,29 +763,21 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
     }
 }
 
-struct AveragePrecisionPyGeneric {
-
-}
-
-impl AveragePrecisionPyGeneric {
-    fn new() -> Self {
-        return AveragePrecisionPyGeneric {};
-    }
-}
+struct AveragePrecisionPyGeneric;
 
 impl PyScoreGeneric<AveragePrecision> for AveragePrecisionPyGeneric {
     fn get_score(&self) -> AveragePrecision {
-        return AveragePrecision::new();
+        return AveragePrecision;
     }
 }
 
 struct RocAucPyGeneric {
-    max_fpr: Option<f32>,
+    max_fpr: Option<f64>,
 }
 
 impl RocAucPyGeneric {
-    fn new(max_fpr: Option<f32>) -> Self {
-        return RocAucPyGeneric { max_fpr: max_fpr };
+    fn new(max_fpr: Option<f64>) -> Self {
+        return RocAucPyGeneric { max_fpr };
     }
 }
 
@@ -865,94 +792,94 @@ impl PyScoreGeneric<RocAucWithOptionalMaxFPR> for RocAucPyGeneric {
 // https://doc.rust-lang.org/rust-by-example/macros/designators.html
 // https://users.rust-lang.org/t/is-there-a-way-to-convert-given-identifier-to-a-string-in-a-macro/42907
 macro_rules! average_precision_py {
-    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $weight_type:ty) => {
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
         #[pyfunction(name = $pyname)]
         #[pyo3(signature = (labels, predictions, *, weights=None, order=None))]
         pub fn $fname<'py>(
             py: Python<'py>,
             labels: PyReadonlyArray1<'py, $label_type>,
             predictions: PyReadonlyArray1<'py, $prediction_type>,
-            weights: Option<PyReadonlyArray1<'py, $weight_type>>,
+            weights: Option<PyReadonlyArray1<'py, $prediction_type>>,
             order: Option<PyOrder>
-        ) -> $prediction_type
+        ) -> f64
         {
-            return AveragePrecisionPyGeneric::new().score_py(py, labels, predictions, weights, order);
+            return AveragePrecisionPyGeneric.score_py(py, labels, predictions, weights, order);
         }
     };
-    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $weight_type:ty, $py_module:ident) => {
-        average_precision_py!($fname, $pyname, $label_type, $prediction_type, $weight_type);
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
+        average_precision_py!($fname, $pyname, $label_type, $prediction_type);
         $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
     };
 }
 
 
 macro_rules! roc_auc_py {
-    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $weight_type:ty) => {
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
         #[pyfunction(name = $pyname)]
         #[pyo3(signature = (labels, predictions, *, weights=None, order=None, max_fpr=None))]
         pub fn $fname<'py>(
             py: Python<'py>,
             labels: PyReadonlyArray1<'py, $label_type>,
             predictions: PyReadonlyArray1<'py, $prediction_type>,
-            weights: Option<PyReadonlyArray1<'py, $weight_type>>,
+            weights: Option<PyReadonlyArray1<'py, $prediction_type>>,
             order: Option<PyOrder>,
-            max_fpr: Option<f32>,
-        ) -> $prediction_type
+            max_fpr: Option<f64>,
+        ) -> f64
         {
             return RocAucPyGeneric::new(max_fpr).score_py(py, labels, predictions, weights, order);
         }
     };
-    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $weight_type: ty, $py_module:ident) => {
-        roc_auc_py!($fname, $pyname, $label_type, $prediction_type, $weight_type);
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
+        roc_auc_py!($fname, $pyname, $label_type, $prediction_type);
         $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
     };
 }
 
 
 macro_rules! average_precision_on_two_sorted_samples_py {
-    ($fname: ident, $pyname:literal, $lt:ty, $pt:ty, $wt:ty, $lt1:ty, $pt1:ty, $wt1:ty, $lt2:ty, $pt2:ty, $wt2: ty) => {
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
         #[pyfunction(name = $pyname)]
         #[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2, *))]
         pub fn $fname<'py>(
             py: Python<'py>,
-            labels1: PyReadonlyArray1<'py, $lt1>,
-            predictions1: PyReadonlyArray1<'py, $pt1>,
-            weights1: Option<PyReadonlyArray1<'py, $wt1>>,
-            labels2: PyReadonlyArray1<'py, $lt2>,
-            predictions2: PyReadonlyArray1<'py, $pt2>,
-            weights2: Option<PyReadonlyArray1<'py, $wt2>>,
-        ) -> $pt
+            labels1: PyReadonlyArray1<'py, $label_type>,
+            predictions1: PyReadonlyArray1<'py, $prediction_type>,
+            weights1: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            labels2: PyReadonlyArray1<'py, $label_type>,
+            predictions2: PyReadonlyArray1<'py, $prediction_type>,
+            weights2: Option<PyReadonlyArray1<'py, $prediction_type>>,
+        ) -> f64
         {
-            return AveragePrecisionPyGeneric::new().score_two_sorted_samples_py_generic::<$lt, $pt, $wt, $lt1, $lt2, $pt1, $pt2, $wt1, $wt2>(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
+            return AveragePrecisionPyGeneric.score_two_sorted_samples_py_generic::<$label_type, $prediction_type, $label_type, $prediction_type, $prediction_type, $prediction_type, $prediction_type>(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
         }
     };
-    ($fname: ident, $pyname:literal, $lt:ty, $pt:ty, $wt:ty, $lt1:ty, $pt1:ty, $wt1:ty, $lt2:ty, $pt2:ty, $wt2: ty, $py_module:ident) => {
-        average_precision_on_two_sorted_samples_py!($fname, $pyname, $lt, $pt, $wt, $lt1, $pt1, $wt1, $lt2, $pt2, $wt2);
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
+        average_precision_on_two_sorted_samples_py!($fname, $pyname, $label_type, $prediction_type);
         $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
     };
 }
 
 
 macro_rules! roc_auc_on_two_sorted_samples_py {
-    ($fname: ident, $pyname:literal, $lt:ty, $pt:ty, $wt:ty, $lt1:ty, $pt1:ty, $wt1:ty, $lt2:ty, $pt2:ty, $wt2: ty) => {
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty) => {
         #[pyfunction(name = $pyname)]
         #[pyo3(signature = (labels1, predictions1, weights1, labels2, predictions2, weights2, *, max_fpr=None))]
         pub fn $fname<'py>(
             py: Python<'py>,
-            labels1: PyReadonlyArray1<'py, $lt1>,
-            predictions1: PyReadonlyArray1<'py, $pt1>,
-            weights1: Option<PyReadonlyArray1<'py, $wt1>>,
-            labels2: PyReadonlyArray1<'py, $lt2>,
-            predictions2: PyReadonlyArray1<'py, $pt2>,
-            weights2: Option<PyReadonlyArray1<'py, $wt2>>,
-            max_fpr: Option<f32>,
-        ) -> $pt
+            labels1: PyReadonlyArray1<'py, $label_type>,
+            predictions1: PyReadonlyArray1<'py, $prediction_type>,
+            weights1: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            labels2: PyReadonlyArray1<'py, $label_type>,
+            predictions2: PyReadonlyArray1<'py, $prediction_type>,
+            weights2: Option<PyReadonlyArray1<'py, $prediction_type>>,
+            max_fpr: Option<f64>,
+        ) -> f64
         {
-            return RocAucPyGeneric::new(max_fpr).score_two_sorted_samples_py_generic::<$lt, $pt, $wt, $lt1, $lt2, $pt1, $pt2, $wt1, $wt2>(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
+            return RocAucPyGeneric::new(max_fpr).score_two_sorted_samples_py_generic::<$label_type, $prediction_type, $label_type, $prediction_type, $prediction_type, $prediction_type, $prediction_type>(py, labels1, predictions1, weights1, labels2, predictions2, weights2);
         }
     };
-    ($fname: ident, $pyname:literal, $lt:ty, $pt:ty, $wt:ty, $lt1:ty, $pt1:ty, $wt1:ty, $lt2:ty, $pt2:ty, $wt2: ty, $py_module:ident) => {
-        roc_auc_on_two_sorted_samples_py!($fname, $pyname, $lt, $pt, $wt, $lt1, $pt1, $wt1, $lt2, $pt2, $wt2);
+    ($fname: ident, $pyname:literal, $label_type:ty, $prediction_type:ty, $py_module:ident) => {
+        roc_auc_on_two_sorted_samples_py!($fname, $pyname, $label_type, $prediction_type);
         $py_module.add_function(wrap_pyfunction!($fname, $py_module)?).unwrap();
     };
 }
@@ -1043,81 +970,81 @@ pub fn loo_cossim_many_py_f32<'py>(
 
 #[pymodule(name = "_scors")]
 fn scors(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    average_precision_py!(average_precision_bool_f32, "average_precision_bool_f32", bool, f32, f32, m);
-    average_precision_py!(average_precision_i8_f32, "average_precision_i8_f32", i8, f32, f32, m);
-    average_precision_py!(average_precision_i16_f32, "average_precision_i16_f32", i16, f32, f32, m);
-    average_precision_py!(average_precision_i32_f32, "average_precision_i32_f32", i32, f32, f32, m);
-    average_precision_py!(average_precision_i64_f32, "average_precision_i64_f32", i64, f32, f32, m);
-    average_precision_py!(average_precision_u8_f32, "average_precision_u8_f32", u8, f32, f32, m);
-    average_precision_py!(average_precision_u16_f32, "average_precision_u16_f32", u16, f32, f32, m);
-    average_precision_py!(average_precision_u32_f32, "average_precision_u32_f32", u32, f32, f32, m);
-    average_precision_py!(average_precision_u64_f32, "average_precision_u64_f32", u64, f32, f32, m);
-    average_precision_py!(average_precision_bool_f64, "average_precision_bool_f64", bool, f64, f64, m);
-    average_precision_py!(average_precision_i8_f64, "average_precision_i8_f64", i8, f64, f64, m);
-    average_precision_py!(average_precision_i16_f64, "average_precision_i16_f64", i16, f64, f64, m);
-    average_precision_py!(average_precision_i32_f64, "average_precision_i32_f64", i32, f64, f64, m);
-    average_precision_py!(average_precision_i64_f64, "average_precision_i64_f64", i64, f64, f64, m);
-    average_precision_py!(average_precision_u8_f64, "average_precision_u8_f64", u8, f64, f64, m);
-    average_precision_py!(average_precision_u16_f64, "average_precision_u16_f64", u16, f64, f64, m);
-    average_precision_py!(average_precision_u32_f64, "average_precision_u32_f64", u32, f64, f64, m);
-    average_precision_py!(average_precision_u64_f64, "average_precision_u64_f64", u64, f64, f64, m);
+    average_precision_py!(average_precision_bool_f32, "average_precision_bool_f32", bool, f32, m);
+    average_precision_py!(average_precision_i8_f32, "average_precision_i8_f32", i8, f32, m);
+    average_precision_py!(average_precision_i16_f32, "average_precision_i16_f32", i16, f32, m);
+    average_precision_py!(average_precision_i32_f32, "average_precision_i32_f32", i32, f32, m);
+    average_precision_py!(average_precision_i64_f32, "average_precision_i64_f32", i64, f32, m);
+    average_precision_py!(average_precision_u8_f32, "average_precision_u8_f32", u8, f32, m);
+    average_precision_py!(average_precision_u16_f32, "average_precision_u16_f32", u16, f32, m);
+    average_precision_py!(average_precision_u32_f32, "average_precision_u32_f32", u32, f32, m);
+    average_precision_py!(average_precision_u64_f32, "average_precision_u64_f32", u64, f32, m);
+    average_precision_py!(average_precision_bool_f64, "average_precision_bool_f64", bool, f64, m);
+    average_precision_py!(average_precision_i8_f64, "average_precision_i8_f64", i8, f64, m);
+    average_precision_py!(average_precision_i16_f64, "average_precision_i16_f64", i16, f64, m);
+    average_precision_py!(average_precision_i32_f64, "average_precision_i32_f64", i32, f64, m);
+    average_precision_py!(average_precision_i64_f64, "average_precision_i64_f64", i64, f64, m);
+    average_precision_py!(average_precision_u8_f64, "average_precision_u8_f64", u8, f64, m);
+    average_precision_py!(average_precision_u16_f64, "average_precision_u16_f64", u16, f64, m);
+    average_precision_py!(average_precision_u32_f64, "average_precision_u32_f64", u32, f64, m);
+    average_precision_py!(average_precision_u64_f64, "average_precision_u64_f64", u64, f64, m);
 
-    roc_auc_py!(roc_auc_bool_f32, "roc_auc_bool_f32", bool, f32, f32, m);
-    roc_auc_py!(roc_auc_i8_f32, "roc_auc_i8_f32", i8, f32, f32, m);
-    roc_auc_py!(roc_auc_i16_f32, "roc_auc_i16_f32", i16, f32, f32, m);
-    roc_auc_py!(roc_auc_i32_f32, "roc_auc_i32_f32", i32, f32, f32, m);
-    roc_auc_py!(roc_auc_i64_f32, "roc_auc_i64_f32", i64, f32, f32, m);
-    roc_auc_py!(roc_auc_u8_f32, "roc_auc_u8_f32", u8, f32, f32, m);
-    roc_auc_py!(roc_auc_u16_f32, "roc_auc_u16_f32", u16, f32, f32, m);
-    roc_auc_py!(roc_auc_u32_f32, "roc_auc_u32_f32", u32, f32, f32, m);
-    roc_auc_py!(roc_auc_u64_f32, "roc_auc_u64_f32", u64, f32, f32, m);
-    roc_auc_py!(roc_auc_bool_f64, "roc_auc_bool_f64", bool, f64, f64, m);
-    roc_auc_py!(roc_auc_i8_f64, "roc_auc_i8_f64", i8, f64, f64, m);
-    roc_auc_py!(roc_auc_i16_f64, "roc_auc_i16_f64", i16, f64, f64, m);
-    roc_auc_py!(roc_auc_i32_f64, "roc_auc_i32_f64", i32, f64, f64, m);
-    roc_auc_py!(roc_auc_i64_f64, "roc_auc_i64_f64", i64, f64, f64, m);
-    roc_auc_py!(roc_auc_u8_f64, "roc_auc_u8_f64", u8, f64, f64, m);
-    roc_auc_py!(roc_auc_u16_f64, "roc_auc_u16_f64", u16, f64, f64, m);
-    roc_auc_py!(roc_auc_u32_f64, "roc_auc_u32_f64", u32, f64, f64, m);
-    roc_auc_py!(roc_auc_u64_f64, "roc_auc_u64_f64", u64, f64, f64, m);
+    roc_auc_py!(roc_auc_bool_f32, "roc_auc_bool_f32", bool, f32, m);
+    roc_auc_py!(roc_auc_i8_f32, "roc_auc_i8_f32", i8, f32, m);
+    roc_auc_py!(roc_auc_i16_f32, "roc_auc_i16_f32", i16, f32, m);
+    roc_auc_py!(roc_auc_i32_f32, "roc_auc_i32_f32", i32, f32, m);
+    roc_auc_py!(roc_auc_i64_f32, "roc_auc_i64_f32", i64, f32, m);
+    roc_auc_py!(roc_auc_u8_f32, "roc_auc_u8_f32", u8, f32, m);
+    roc_auc_py!(roc_auc_u16_f32, "roc_auc_u16_f32", u16, f32, m);
+    roc_auc_py!(roc_auc_u32_f32, "roc_auc_u32_f32", u32, f32, m);
+    roc_auc_py!(roc_auc_u64_f32, "roc_auc_u64_f32", u64, f32, m);
+    roc_auc_py!(roc_auc_bool_f64, "roc_auc_bool_f64", bool, f64, m);
+    roc_auc_py!(roc_auc_i8_f64, "roc_auc_i8_f64", i8, f64, m);
+    roc_auc_py!(roc_auc_i16_f64, "roc_auc_i16_f64", i16, f64, m);
+    roc_auc_py!(roc_auc_i32_f64, "roc_auc_i32_f64", i32, f64, m);
+    roc_auc_py!(roc_auc_i64_f64, "roc_auc_i64_f64", i64, f64, m);
+    roc_auc_py!(roc_auc_u8_f64, "roc_auc_u8_f64", u8, f64, m);
+    roc_auc_py!(roc_auc_u16_f64, "roc_auc_u16_f64", u16, f64, m);
+    roc_auc_py!(roc_auc_u32_f64, "roc_auc_u32_f64", u32, f64, m);
+    roc_auc_py!(roc_auc_u64_f64, "roc_auc_u64_f64", u64, f64, m);
 
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f32, "average_precision_on_two_sorted_samples_bool_f32", bool, f32, f32, bool, f32, f32, bool, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f32, "average_precision_on_two_sorted_samples_i8_f32", i8, f32, f32, i8, f32, f32, i8, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f32, "average_precision_on_two_sorted_samples_i16_f32", i16, f32, f32, i16, f32, f32, i16, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f32, "average_precision_on_two_sorted_samples_i32_f32", i32, f32, f32, i32, f32, f32, i32, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f32, "average_precision_on_two_sorted_samples_i64_f32", i64, f32, f32, i64, f32, f32, i64, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f32, "average_precision_on_two_sorted_samples_u8_f32", u8, f32, f32, u8, f32, f32, u8, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f32, "average_precision_on_two_sorted_samples_u16_f32", u16, f32, f32, u16, f32, f32, u16, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f32, "average_precision_on_two_sorted_samples_u32_f32", u32, f32, f32, u32, f32, f32, u32, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f32, "average_precision_on_two_sorted_samples_u64_f32", u64, f32, f32, u64, f32, f32, u64, f32, f32, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f64, "average_precision_on_two_sorted_samples_bool_f64", bool, f64, f64, bool, f64, f64, bool, f64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f64, "average_precision_on_two_sorted_samples_i8_f64", i8, f64, f64, i8, f64, f64, i8, f64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f64, "average_precision_on_two_sorted_samples_i16_f64", i16, f64, f64, i16, f64, f64, i16, f64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f64, "average_precision_on_two_sorted_samples_i32_f64", i32, f64, f64, i16, f64, f64, i16, f64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f64, "average_precision_on_two_sorted_samples_i64_f64", i64, f64, f64, i64, f64, f64, i64, f64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f64, "average_precision_on_two_sorted_samples_u8_f64", u8, f64, f64, u8, f64, f64, u8, f64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f64, "average_precision_on_two_sorted_samples_u16_f64", u16, f64, f64, u16, f64, f64, u16, f64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f64, "average_precision_on_two_sorted_samples_u32_f64", u32, f64, f64, u32, f64, f64, u32, f64, f64, m);
-    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f64, "average_precision_on_two_sorted_samples_u64_f64", u64, f64, f64, u64, f64, f64, u64, f64, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f32, "average_precision_on_two_sorted_samples_bool_f32", bool, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f32, "average_precision_on_two_sorted_samples_i8_f32", i8, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f32, "average_precision_on_two_sorted_samples_i16_f32", i16, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f32, "average_precision_on_two_sorted_samples_i32_f32", i32, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f32, "average_precision_on_two_sorted_samples_i64_f32", i64, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f32, "average_precision_on_two_sorted_samples_u8_f32", u8, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f32, "average_precision_on_two_sorted_samples_u16_f32", u16, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f32, "average_precision_on_two_sorted_samples_u32_f32", u32, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f32, "average_precision_on_two_sorted_samples_u64_f32", u64, f32, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_bool_f64, "average_precision_on_two_sorted_samples_bool_f64", bool, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i8_f64, "average_precision_on_two_sorted_samples_i8_f64", i8, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i16_f64, "average_precision_on_two_sorted_samples_i16_f64", i16, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i32_f64, "average_precision_on_two_sorted_samples_i32_f64", i32, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_i64_f64, "average_precision_on_two_sorted_samples_i64_f64", i64, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u8_f64, "average_precision_on_two_sorted_samples_u8_f64", u8, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u16_f64, "average_precision_on_two_sorted_samples_u16_f64", u16, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u32_f64, "average_precision_on_two_sorted_samples_u32_f64", u32, f64, m);
+    average_precision_on_two_sorted_samples_py!(average_precision_on_two_sorted_samples_u64_f64, "average_precision_on_two_sorted_samples_u64_f64", u64, f64, m);
 
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f32, "roc_auc_on_two_sorted_samples_bool_f32", bool, f32, f32, bool, f32, f32, bool, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f32, "roc_auc_on_two_sorted_samples_i8_f32", i8, f32, f32, i8, f32, f32, i8, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f32, "roc_auc_on_two_sorted_samples_i16_f32", i16, f32, f32, i16, f32, f32, i16, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f32, "roc_auc_on_two_sorted_samples_i32_f32", i32, f32, f32, i32, f32, f32, i32, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f32, "roc_auc_on_two_sorted_samples_i64_f32", i64, f32, f32, i64, f32, f32, i64, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f32, "roc_auc_on_two_sorted_samples_u8_f32", u8, f32, f32, u8, f32, f32, u8, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f32, "roc_auc_on_two_sorted_samples_u16_f32", u16, f32, f32, u16, f32, f32, u16, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f32, "roc_auc_on_two_sorted_samples_u32_f32", u32, f32, f32, u32, f32, f32, u32, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f32, "roc_auc_on_two_sorted_samples_u64_f32", u64, f32, f32, u64, f32, f32, u64, f32, f32, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f64, "roc_auc_on_two_sorted_samples_bool_f64", bool, f64, f64, bool, f64, f64, bool, f64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f64, "roc_auc_on_two_sorted_samples_i8_f64", i8, f64, f64, i8, f64, f64, i8, f64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f64, "roc_auc_on_two_sorted_samples_i16_f64", i16, f64, f64, i16, f64, f64, i16, f64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f64, "roc_auc_on_two_sorted_samples_i32_f64", i32, f64, f64, i16, f64, f64, i16, f64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f64, "roc_auc_on_two_sorted_samples_i64_f64", i64, f64, f64, i64, f64, f64, i64, f64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f64, "roc_auc_on_two_sorted_samples_u8_f64", u8, f64, f64, u8, f64, f64, u8, f64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f64, "roc_auc_on_two_sorted_samples_u16_f64", u16, f64, f64, u16, f64, f64, u16, f64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f64, "roc_auc_on_two_sorted_samples_u32_f64", u32, f64, f64, u32, f64, f64, u32, f64, f64, m);
-    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f64, "roc_auc_on_two_sorted_samples_u64_f64", u64, f64, f64, u64, f64, f64, u64, f64, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f32, "roc_auc_on_two_sorted_samples_bool_f32", bool, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f32, "roc_auc_on_two_sorted_samples_i8_f32", i8, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f32, "roc_auc_on_two_sorted_samples_i16_f32", i16, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f32, "roc_auc_on_two_sorted_samples_i32_f32", i32, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f32, "roc_auc_on_two_sorted_samples_i64_f32", i64, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f32, "roc_auc_on_two_sorted_samples_u8_f32", u8, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f32, "roc_auc_on_two_sorted_samples_u16_f32", u16, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f32, "roc_auc_on_two_sorted_samples_u32_f32", u32, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f32, "roc_auc_on_two_sorted_samples_u64_f32", u64, f32, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_bool_f64, "roc_auc_on_two_sorted_samples_bool_f64", bool, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i8_f64, "roc_auc_on_two_sorted_samples_i8_f64", i8, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i16_f64, "roc_auc_on_two_sorted_samples_i16_f64", i16, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i32_f64, "roc_auc_on_two_sorted_samples_i32_f64", i32, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_i64_f64, "roc_auc_on_two_sorted_samples_i64_f64", i64, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u8_f64, "roc_auc_on_two_sorted_samples_u8_f64", u8, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u16_f64, "roc_auc_on_two_sorted_samples_u16_f64", u16, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u32_f64, "roc_auc_on_two_sorted_samples_u32_f64", u32, f64, m);
+    roc_auc_on_two_sorted_samples_py!(roc_auc_on_two_sorted_samples_u64_f64, "roc_auc_on_two_sorted_samples_u64_f64", u64, f64, m);
 
     m.add_function(wrap_pyfunction!(loo_cossim_py, m)?).unwrap();
     m.add_function(wrap_pyfunction!(loo_cossim_many_py_f64, m)?).unwrap();
@@ -1136,7 +1063,7 @@ mod tests {
         let labels: [u8; 4] = [1, 0, 1, 0];
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
-        let actual: f64 = score_sorted_sample(AveragePrecision::new(), &predictions, &labels, &weights, Order::DESCENDING);
+        let actual: f64 = score_sorted_sample(AveragePrecision, &predictions, &labels, &weights, Order::DESCENDING);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1145,7 +1072,7 @@ mod tests {
         let labels: [u8; 8] = [1, 1, 0, 0, 1, 1, 0, 0];
         let predictions: [f64; 8] = [0.8, 0.8, 0.4, 0.4, 0.35, 0.35, 0.1, 0.1];
         let weights: [f64; 8] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-        let actual: f64 = score_sorted_sample(AveragePrecision::new(), &predictions, &labels, &weights, Order::DESCENDING);
+        let actual: f64 = score_sorted_sample(AveragePrecision, &predictions, &labels, &weights, Order::DESCENDING);
         assert_eq!(actual, 0.8333333333333333);
     }
 
@@ -1173,7 +1100,7 @@ mod tests {
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
         let actual: f64 = score_two_sorted_samples(
-            AveragePrecision::new(),
+            AveragePrecision,
             predictions.iter().cloned(),
             labels.iter().cloned(),
             weights.iter().cloned(),
@@ -1207,7 +1134,7 @@ mod tests {
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
         let actual: f64 = score_two_sorted_samples(
-            RocAuc::new(),
+            RocAuc,
             predictions.iter().cloned(),
             labels.iter().cloned(),
             weights.iter().cloned(),
@@ -1241,7 +1168,7 @@ mod tests {
         let predictions: [f64; 4] = [0.8, 0.4, 0.35, 0.1];
         let weights: [f64; 4] = [1.0, 1.0, 1.0, 1.0];
         let actual: f64 = score_two_sorted_samples(
-            RocAucWithMaxFPR::new(0.25),
+            RocAucWithMaxFPR::new(0.25f64),
             predictions.iter().cloned(),
             labels.iter().cloned(),
             weights.iter().cloned(),
