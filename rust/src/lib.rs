@@ -623,18 +623,69 @@ where P: num::Float + From<f32>
 }
 
 
+/// Accumulate `row` into `sum` element-wise.  The slice signature lets LLVM
+/// prove unit stride and emit SIMD instructions.
+#[inline]
+fn accum_row<F: num::Float + AddAssign>(row: &[F], sum: &mut [F]) {
+    for (f, s) in row.iter().zip(sum.iter_mut()) {
+        *s += *f;
+    }
+}
+
+/// Compute (prod_sum, m_sqs, l_sqs) for one replicate row against the
+/// already-accumulated replicate_sum.  Slice signature enables SIMD.
+#[inline]
+fn score_row<F: num::Float + AddAssign>(row: &[F], sum: &[F], loo_weight_factor: F) -> (F, F, F) {
+    let mut prod_sum = F::zero();
+    let mut m_sqs = F::zero();
+    let mut l_sqs = F::zero();
+    for (f, s) in row.iter().zip(sum.iter()) {
+        let m_f = *f;
+        let l_f = (*s - *f) * loo_weight_factor;
+        prod_sum += m_f * l_f;
+        m_sqs += m_f * m_f;
+        l_sqs += l_f * l_f;
+    }
+    (prod_sum, m_sqs, l_sqs)
+}
+
 pub fn loo_cossim<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>, replicate_sum: &mut ArrayViewMut1<'_, F>) -> F {
     let num_replicates = mat.shape()[0];
     let loo_weight = F::from(num_replicates - 1).unwrap();
     let loo_weight_factor = F::from(1).unwrap() / loo_weight;
+
+    // If both the feature axis and replicate_sum have unit stride, extract
+    // plain slices so LLVM can prove contiguous access and emit SIMD.
+    // mat.strides()[1] is the stride of the feature (innermost) axis;
+    // replicate_sum.strides()[0] is the stride of the only axis.
+    // Both are 1 whenever the caller holds a C-contiguous row — the common
+    // case from loo_cossim_many (each 2-D slice of a 3-D array whose last
+    // two axes are contiguous) and from direct numpy fancy-index results.
+    let contiguous = mat.strides()[1] == 1 && replicate_sum.strides()[0] == 1;
+
+    if contiguous {
+        for mat_replicate in mat.outer_iter() {
+            accum_row(mat_replicate.as_slice().unwrap(), replicate_sum.as_slice_mut().unwrap());
+        }
+        let mut result = F::zero();
+        for mat_replicate in mat.outer_iter() {
+            let (prod_sum, m_sqs, l_sqs) = score_row(
+                mat_replicate.as_slice().unwrap(),
+                replicate_sum.as_slice().unwrap(),
+                loo_weight_factor,
+            );
+            result += prod_sum / (m_sqs * l_sqs).sqrt();
+        }
+        return result / F::from(num_replicates).unwrap();
+    }
+
+    // Strided fallback — arbitrary numpy memory layouts.
     for mat_replicate in mat.outer_iter() {
         for (feature, feature_sum) in mat_replicate.iter().zip(replicate_sum.iter_mut()) {
             *feature_sum += *feature;
         }
     }
-
     let mut result = F::zero();
-
     for mat_replicate in mat.outer_iter() {
         let mut m_sqs = F::zero();
         let mut l_sqs = F::zero();
@@ -648,7 +699,6 @@ pub fn loo_cossim<F: num::Float + AddAssign>(mat: &ArrayView2<'_, F>, replicate_
         }
         result += prod_sum / (m_sqs * l_sqs).sqrt();
     }
-
     return result / F::from(num_replicates).unwrap();
 }
 
