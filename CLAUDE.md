@@ -63,6 +63,11 @@ The manylinux CI wheels target generic x86-64 baseline (SSE2). The SLURM cluster
 - `rust-toolchain.toml` not needed (stable suffices); nightly was only required for trait aliases
 - `GILProtected` compile error with Python 3.13 came from `numpy` (rust-numpy) 0.23.0, not scors itself — fixed by upgrading to rust-numpy 0.28
 
+## Dependency Notes
+
+- `numba` is a dev dependency used only for benchmarks (`tests/benchmarks/`). It has no cp315 wheel, so it is gated with `python_version < '3.15'` — benchmarks are simply unavailable on Python 3.15+.
+- `ipython` 9.x requires Python ≥3.11, which is why `requires-python = ">=3.11"` (Python 3.10 support was dropped when bumping to ipython 9.x).
+
 ## Known Design Notes
 
 - `score_two_sorted_samples` is not used in mezzo-forte: for multiple metrics (AP + AUROC + multiple `max_fpr`), separate sorted passes are faster than the merge iterator because the merge cost is paid once per metric call. The merge approach avoids copying the similarity matrix but is only a win for exactly one metric.
