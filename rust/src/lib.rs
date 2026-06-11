@@ -696,20 +696,20 @@ trait PyScoreGeneric<S: ScoreSortedDescending>: Ungil + Sync {
         weights: Option<PyReadonlyArray1<'py, W>>,
         order: Option<PyOrder>,
     ) -> f64
-    where P: IntoF64 + Element + num::Float + TotalOrder, B: BinaryLabel + Element, W: Element + Into<f64> + Copy
+    where P: IntoF64 + Element + num::Float + TotalOrder, B: BinaryLabel + Element, W: IntoF64 + Element
     {
         let labels = labels.as_array();
         let predictions = predictions.as_array();
         let order = order.map(py_order_as_order);
         return match weights {
             Some(weight) => {
-                let w: Vec<f64> = weight.as_array().iter().map(|&x| x.into()).collect();
+                let w = weight.as_array();
                 py.detach(move || {
-                    score_maybe_sorted_sample(self.get_score(), &predictions, &labels, Some(&w.as_slice()), order)
+                    score_maybe_sorted_sample(self.get_score(), &predictions, &labels, Some(&w), order)
                 })
             },
             None => py.detach(move || {
-                score_maybe_sorted_sample(self.get_score(), &predictions, &labels, None::<&Vec<f64>>, order)
+                score_maybe_sorted_sample(self.get_score(), &predictions, &labels, None::<&Vec<W>>, order)
             })
         };
     }
