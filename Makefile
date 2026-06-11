@@ -45,6 +45,14 @@ print(f'  git push origin v{v}'), \
 print(f'  git push origin main'), \
 )"
 
+.PHONY: docs
+docs: ## Build HTML documentation with Sphinx
+	@uv run sphinx-build -b html docs public
+
+.PHONY: clean-docs
+clean-docs: ## Remove built documentation
+	@rm -rf public docs/generated
+
 .PHONY: help
 help:
 	@uv run python -c "import re; \

@@ -151,17 +151,91 @@ def sort(
     return out
 
 
-def loo_cossim_many(data: np.ndarray):
+def loo_cossim_many(data: np.ndarray) -> np.ndarray:
+    """Batched leave-one-out cosine similarity.
+
+    Computes :func:`loo_cossim` over the last two axes of *data*, treating all
+    leading axes as independent batch dimensions.
+
+    :param data: Array of shape ``(..., replicates, features)`` with dtype
+        ``float32`` or ``float64``.  At least 2-D.
+    :return: Array of shape ``data.shape[:-2]`` containing the LOO cosine
+        similarity for each entry along the leading axes.
+    """
     sim = _loo_cossim_many(np.reshape(data, (-1, *data.shape[-2:])))
     sim_reshaped = np.reshape(sim, data.shape[:-2])
     return sim_reshaped
 
 
-def average_precision(labels: np.ndarray, predictions: np.ndarray, weights: np.ndarray | None = None, order: Order | None = None):
+def average_precision(
+    labels: np.ndarray,
+    predictions: np.ndarray,
+    weights: np.ndarray | None = None,
+    order: Order | None = None,
+) -> float:
+    """Compute Average Precision (area under the precision-recall curve).
+
+    Re-implements :func:`sklearn.metrics.average_precision_score` for binary
+    classification.  Differences from sklearn:
+
+    - Parameter names differ: ``labels`` / ``predictions`` / ``weights``
+      instead of ``y_true`` / ``y_score`` / ``sample_weight``.
+    - ``order`` parameter skips the internal sort for pre-sorted data.
+    - No input validation (no ``np.unique`` checks) — caller is responsible.
+    - Output is always ``float64`` regardless of input dtype.
+
+    :param labels: 1-D array of binary labels.  Supported dtypes: ``bool``,
+        ``int8``–``int64``, ``uint8``–``uint64``.
+    :param predictions: 1-D array of scores, same length as *labels*.
+        Supported dtypes: ``float32``, ``float64``.  Must have the same dtype
+        as *weights* when *weights* is provided.
+    :param weights: Optional 1-D array of sample weights, same dtype and
+        length as *predictions*.
+    :param order: If ``None`` the data is sorted internally (descending by
+        score).  Pass :attr:`Order.DESCENDING` or :attr:`Order.ASCENDING` to
+        skip the sort when the data is already ordered.
+    :return: Average Precision as a ``float64`` scalar.
+    """
     return _from_generic_score("average_precision")(labels=labels, predictions=predictions, weights=weights, order=order)
 
 
-def roc_auc(labels: np.ndarray, predictions: np.ndarray, weights: np.ndarray | None = None, order: Order | None = None, max_fpr: float | None = None):
+def roc_auc(
+    labels: np.ndarray,
+    predictions: np.ndarray,
+    weights: np.ndarray | None = None,
+    order: Order | None = None,
+    max_fpr: float | None = None,
+) -> float:
+    """Compute ROC-AUC, optionally truncated at a maximum false-positive rate.
+
+    Re-implements :func:`sklearn.metrics.roc_auc_score` for binary
+    classification.  When *max_fpr* is given the score is the normalised
+    partial AUC following McClish (1989), scaled to ``[0, 1]`` so that 0.5
+    corresponds to a random classifier and 1.0 to a perfect one.
+
+    Differences from sklearn:
+
+    - Parameter names differ: ``labels`` / ``predictions`` / ``weights``
+      instead of ``y_true`` / ``y_score`` / ``sample_weight``.
+    - ``order`` parameter skips the internal sort for pre-sorted data.
+    - No input validation — caller is responsible.
+    - Output is always ``float64`` regardless of input dtype.
+    - ``max_fpr`` accepts ``float64``; sklearn accepts ``float``.
+
+    :param labels: 1-D array of binary labels.  Supported dtypes: ``bool``,
+        ``int8``–``int64``, ``uint8``–``uint64``.
+    :param predictions: 1-D array of scores, same length as *labels*.
+        Supported dtypes: ``float32``, ``float64``.  Must have the same dtype
+        as *weights* when *weights* is provided.
+    :param weights: Optional 1-D array of sample weights, same dtype and
+        length as *predictions*.
+    :param order: If ``None`` the data is sorted internally (descending by
+        score).  Pass :attr:`Order.DESCENDING` or :attr:`Order.ASCENDING` to
+        skip the sort when the data is already ordered.
+    :param max_fpr: If given, truncate the ROC curve at this false-positive
+        rate and return the normalised partial AUC.
+    :return: ROC-AUC as a ``float64`` scalar.
+    """
     return _from_generic_score("roc_auc")(labels=labels, predictions=predictions, weights=weights, order=order, max_fpr=max_fpr)
 
 

@@ -24,8 +24,10 @@ dev = [
   "maturin>=1.13.3",
   "numba>=0.65.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
   "numpy>=2.4.6",
+  "pydata-sphinx-theme>=0.16.0",
   "pytest>=9.0.3",
   "scikit-learn>=1.9.0",
+  "sphinx>=9.0.0",
 ]
 
 [build-system]

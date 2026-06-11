@@ -4,53 +4,105 @@
 
 # Scors
 
-This package is a Rust re-implementation with Python bindings of some of the [classification scores from scikit-learn](https://scikit-learn.org/stable/api/sklearn.metrics.html) (sklearn),
-restricted to binary classification only. Scores generally have 3 input parameters for labels, predictions, and weights, with slightly different names in `sklearn`:
+Scors is a Rust re-implementation with Python bindings of selected
+[binary classification scores from scikit-learn](https://scikit-learn.org/stable/api/sklearn.metrics.html),
+plus parallel sort utilities.  All computation releases the GIL and uses
+[Rayon](https://github.com/rayon-rs/rayon) for parallelism where beneficial.
 
-| **sklearn**     | **scors**     |
-| ----------------| --------------|
-| `y_true`        | `labels`      |
-| `y_score`       | `predictions` |
-| `sample_weight` | `weights`     |
+## Scores
 
-Functions in `scors` have an additional parameter `order` that can be 
- 1. *(default)* `None` to indicate unsorted data,
- 2. `Order.ASCENDING` to indicate that the input data is sorted in ascending order wrt `predictions`, or
- 3. `Order.DESCENDING` to indicate that the input data is sorted in descending order wrt `predictions`.
- 
-Other parameters that may be present (e.g. `max_fprs` in `roc_auc`) follow the naming and meaning as defined in the respective sklearn counterpart
+Scors implements a subset of sklearn's metrics, restricted to **binary
+classification** only.  Parameter names differ slightly:
 
-## Why?
+| sklearn           | scors         |
+|-------------------|---------------|
+| `y_true`          | `labels`      |
+| `y_score`         | `predictions` |
+| `sample_weight`   | `weights`     |
 
-I want to improve runtime performance of scores for my use case. I have a single large background sample that I combine and score with each of many small foreground smaples.
-For the rank-based metrics (e.g. [`average_precision-score`_](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.average_precision_score.html#sklearn.metrics.average_precision_score)),
-the data is sorted, which has complexity `n*log(n)`. 
-Exploiting the structure of my data helps me avoid this cost to boost performance.
-But even without assumptions about structure in the data, I found ways to improve performance. 
-This is a summary of all the optimizations I implemented (or plan to):
+| sklearn function           | scors function      |
+|----------------------------|---------------------|
+| `average_precision_score`  | `average_precision` |
+| `roc_auc_score`            | `roc_auc`           |
 
- 1. Add option to assume the data is sorted. This allows the caller to exploit structure in data that is already sorted/mostly sorted.
- 2. Remove checks on labels. When stepping through the debugger, I noticed that the sklearn imlementation uses safeguards like [`np.unique`](https://numpy.org/doc/stable/reference/generated/numpy.unique.html) to check the validity of the data.
-    This can be helpful to ensure that assumptions are always met, especially in a library a huge audience and general scope like sklearn.
-    But it also has a performance penalty.
-    I decided, to place the responsibility for data validation completely on the caller.
-    The caller can add or leave out data validation as appropriate
- 3. Minimize data allocation:
-    1. All current scores are implemented as single pass over the data (double pass in case of ROC AUC **with** max fprs).
-    2  For ordered input data, no allocations are made.
-    3. If the optional weights parameter is not provided, no extra constant array filled with `1` is created. Instead, the Rust implementation uses a constant value iterator.
-    4. **TODO**: For unordered input data, I currently create sorted copies of all of the input data. That is a total of 4 (3 if weights are not provided) extra allocations for
-       the index array (for sorting), labels, predictions, and weights. Instead of creating copies of the input arrays, I consider creating index views that simply index
-       into the original arrays through the sorted index array. This may provide another performance benefit, but I still have to benchmark this.
+### Differences from sklearn
 
-## Currently Implemented Scores
+- **`order` parameter** — pass `Order.DESCENDING` / `Order.ASCENDING` to skip
+  the internal sort when data is already ordered.  Default `None` sorts
+  internally.
+- **No data validation** — scors places responsibility for valid inputs on the
+  caller (no `np.unique` checks, no label type coercion).  This avoids
+  overhead that matters when calling the same metric thousands of times.
+- **No multi-class support** — binary labels only.
+- **Output is always `float64`** regardless of input dtype.
+- **Parallel sort** — the internal argsort uses Rayon's global thread pool by
+  default, giving ~10× speedup over sequential sort at 1M elements on
+  multi-core hardware.
 
-| **sklearn**               | **scors**           |
-| ------------------------- | ------------------- |
-| `average_precision_score` | `average_precision` |
-| `roc_auc_score`           | `roc_auc`           |
+### Scores on two sorted samples
 
-## Is It Actually Faster?
+For workloads that combine a large sorted background sample with many small
+foreground samples, scors exposes:
 
-**TODO**: Benchmarks
+- `average_precision_on_two_sorted_samples`
+- `roc_auc_on_two_sorted_samples`
 
+These merge the two sorted iterators on the fly without materialising a
+combined array.  When there is only one metric call per pair this is faster
+than concatenating; for multiple metrics per pair, separate sorted passes
+are typically faster.
+
+## Sort utilities
+
+scors also exposes parallel sort as a first-class API — useful as a drop-in
+replacement for `parallel-sort` (which has limited platform/version coverage):
+
+| function         | description                                      |
+|------------------|--------------------------------------------------|
+| `argsort`        | Returns indices that sort `a` ascending (int64)  |
+| `sort`           | Returns a sorted copy                            |
+| `sort_inplace`   | Sorts in place, returns `None`                   |
+
+All three accept `stable: bool = False` and `num_threads: int | None = None`
+(`None` → global Rayon pool).
+
+### Differences from `numpy.argsort` / `numpy.sort`
+
+- **1D only** — no `axis` parameter.
+- **`stable` bool** instead of `kind` string.
+- **`num_threads`** for explicit parallelism control.
+- **NaN sorts to end** for ascending; for descending NaN appears first (unlike
+  numpy).  If your data may contain NaN use numpy directly.
+- **Always returns `int64`** (`numpy.argsort` returns `intp`, platform-dependent).
+
+## LOO cosine similarity
+
+`loo_cossim` and `loo_cossim_many` compute leave-one-out cosine similarity
+over replicate matrices.  These have no sklearn equivalent.  The inner loops
+are SIMD-vectorized (NEON on ARM, SSE2 on x86-64) for C-contiguous input.
+
+## Benchmarks
+
+At 1M elements on Apple M-series (multi-core):
+
+| path                  | time     | vs baseline |
+|-----------------------|----------|-------------|
+| Sorted (no argsort)   | ~40 ms   | —           |
+| Unsorted, sequential  | ~1950 ms | 1×          |
+| Unsorted, parallel    | ~200 ms  | **~10×**    |
+
+`loo_cossim_many` (1000 × 300 × 500, f32):
+
+| layout       | time    |
+|--------------|---------|
+| C-contiguous | ~84 ms  |
+| F-order      | ~520 ms |
+
+## Installation
+
+```
+pip install scors
+```
+
+Wheels are published for Python 3.11–3.14 on Linux x86-64/aarch64,
+macOS ARM64 and Intel, and Windows x64.
