@@ -524,7 +524,7 @@ wheels = [
 
 [[package]]
 name = "scors"
-version = "0.2.4.dev0"
+version = "0.2.5.dev0"
 source = { editable = "." }
 
 [package.dev-dependencies]
