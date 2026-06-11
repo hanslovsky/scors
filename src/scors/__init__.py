@@ -6,7 +6,7 @@ from typing import Callable, Literal
 import numpy as np
 
 from . import _scors as scors
-from ._scors import loo_cossim
+from ._scors import loo_cossim as _loo_cossim_rust
 
 
 __doc__ = scors.__doc__
@@ -28,6 +28,32 @@ _supported_score_types = (
 )
 
 Order = scors.Order
+"""Enum indicating the sort order of predictions passed to scoring functions.
+
+Pass to the ``order`` parameter of :func:`average_precision` and
+:func:`roc_auc` to skip the internal sort when the data is already ordered.
+
+- ``Order.ASCENDING`` — predictions are sorted smallest-first.
+- ``Order.DESCENDING`` — predictions are sorted largest-first (highest score first).
+"""
+
+
+def loo_cossim(data: np.ndarray) -> float:
+    """Leave-one-out cosine similarity for a matrix of replicates.
+
+    For each replicate row, computes the cosine similarity between that row
+    and the mean of the remaining rows (the leave-one-out mean), then averages
+    over all replicates.
+
+    The inner loops are SIMD-vectorized (NEON on ARM, SSE2 on x86-64) for
+    C-contiguous input.  For batched computation over multiple samples use
+    :func:`loo_cossim_many`.
+
+    :param data: 2-D array of shape ``(replicates, features)`` with dtype
+        ``float32`` or ``float64``.  Requires at least 2 replicates.
+    :return: Scalar LOO cosine similarity as ``float64``.
+    """
+    return _loo_cossim_rust(data)
 
 
 def _lookup_supported_type(dtype: str | np.dtype, supported_type_dict: dict[str, str]) -> str:
@@ -280,26 +306,65 @@ def _score_two_sorted_samples(name: Literal["average_precision", "roc_auc"]):
 
 @_score_two_sorted_samples(name="average_precision")
 def average_precision_on_two_sorted_samples(
-    labels1: np.ndarray,    
+    labels1: np.ndarray,
     predictions1: np.ndarray,
     weights1: np.ndarray | None,
-    labels2: np.ndarray,    
+    labels2: np.ndarray,
     predictions2: np.ndarray,
     weights2: np.ndarray | None,
-):
+) -> float:
+    """Compute Average Precision by merging two pre-sorted samples on the fly.
+
+    Both samples must be sorted in **descending** order by their prediction
+    scores.  The two sorted streams are merged without materialising a combined
+    array, which avoids an O(n) allocation when scoring a large background
+    sample against a small foreground sample.
+
+    For workloads with multiple metric calls per pair (e.g. AP + ROC-AUC),
+    separate :func:`average_precision` calls on the concatenated array are
+    typically faster because the merge cost is paid once per metric.
+
+    :param labels1: 1-D binary label array, sorted descending by *predictions1*.
+    :param predictions1: 1-D score array, descending order.
+    :param weights1: Optional sample weights for sample 1, same dtype as
+        *predictions1*.
+    :param labels2: 1-D binary label array, sorted descending by *predictions2*.
+    :param predictions2: 1-D score array, descending order.
+    :param weights2: Optional sample weights for sample 2, same dtype as
+        *predictions2*.
+    :return: Average Precision as a ``float64`` scalar.
+    """
     raise NotImplementedError()
 
 
 @_score_two_sorted_samples(name="roc_auc")
 def roc_auc_on_two_sorted_samples(
-    labels1: np.ndarray,    
+    labels1: np.ndarray,
     predictions1: np.ndarray,
     weights1: np.ndarray | None,
-    labels2: np.ndarray,    
+    labels2: np.ndarray,
     predictions2: np.ndarray,
     weights2: np.ndarray | None,
     max_fpr: float | None = None,
-):
+) -> float:
+    """Compute ROC-AUC by merging two pre-sorted samples on the fly.
+
+    Both samples must be sorted in **descending** order by their prediction
+    scores.  See :func:`average_precision_on_two_sorted_samples` for the
+    trade-off discussion on when to use the two-sample variant.
+
+    :param labels1: 1-D binary label array, sorted descending by *predictions1*.
+    :param predictions1: 1-D score array, descending order.
+    :param weights1: Optional sample weights for sample 1, same dtype as
+        *predictions1*.
+    :param labels2: 1-D binary label array, sorted descending by *predictions2*.
+    :param predictions2: 1-D score array, descending order.
+    :param weights2: Optional sample weights for sample 2, same dtype as
+        *predictions2*.
+    :param max_fpr: If given, truncate the ROC curve at this false-positive
+        rate and return the normalised partial AUC.
+    :return: ROC-AUC as a ``float64`` scalar.
+    """
     raise NotImplementedError()
     
 
@@ -312,7 +377,6 @@ __all__ = sorted([
     "loo_cossim_many",
     "roc_auc",
     "roc_auc_on_two_sorted_samples",
-    "scors",
     "sort",
     "sort_inplace",
 ])
